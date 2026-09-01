@@ -2,6 +2,13 @@
 
 Alle wesentlichen Änderungen zu diesem Projekt werden in dieser Datei dokumentiert. Das Format lehnt sich an [Keep a Changelog](https://keepachangelog.com/) an.
 
+## [1.0.3] – 2026-09-01
+
+### Fixed
+
+- **Version**: Korrekte Pfad-Auflösung für `version.txt` im Docker-Container (`../../../version.txt` statt `../../version.txt`)
+- **Docker**: `VERSION`-Build-Arg wird in `docker-compose.yml` weitergegeben
+
 ## [1.0.2] – 2026-09-01
 
 ### Fixed

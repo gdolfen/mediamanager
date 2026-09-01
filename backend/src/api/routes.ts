@@ -74,13 +74,13 @@ export const api = Router();
 
 function getVersion(): string {
   try {
-    const versionFile = path.resolve(__dirname, '../../version.txt');
+    const versionFile = path.resolve(__dirname, '../../../version.txt');
     if (fs.existsSync(versionFile)) {
       return fs.readFileSync(versionFile, 'utf-8').trim();
     }
   } catch {}
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf-8'));
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../package.json'), 'utf-8'));
     return pkg.version ?? 'dev';
   } catch {
     return 'dev';

@@ -1,6 +1,9 @@
 services:
   mediamanager:
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: "1.0.2"
     container_name: mediamanager
     restart: unless-stopped
     ports:

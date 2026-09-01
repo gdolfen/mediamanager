@@ -13,6 +13,17 @@ import { startThumbnailWorker, stopThumbnailWorker } from './media/thumbnailWork
 import { logger } from './db/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function getVersion(): string {
+  try {
+    const vf = path.resolve(__dirname, '../../../version.txt');
+    if (fs.existsSync(vf)) return fs.readFileSync(vf, 'utf-8').trim();
+  } catch {}
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../package.json'), 'utf-8'));
+    return pkg.version ?? 'dev';
+  } catch { return 'dev'; }
+}
 const PORT = Number(process.env.PORT ?? 3000);
 
 export function createApp(): express.Express {
@@ -46,7 +57,7 @@ export function startServer(port: number = PORT): Server {
   startScheduler();
   const server = app.listen(port, () => {
     console.log(`MediaManager backend listening on http://localhost:${port}`);
-    logger.info('app', `Backend gestartet, hört auf Port ${port}.`);
+    logger.info('app', `Backend gestartet v${getVersion()}, Port ${port}.`);
     // Unterbrochene Scans erst fortsetzen, wenn der Server vollständig läuft –
     // so blockiert die Wiederaufnahme den Neustart nicht.
     resumeInterruptedScans();

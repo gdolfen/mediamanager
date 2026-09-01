@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { nextIndexedFiles } from '../db/daos.js';
 import { rootBase } from '../db/database.js';
-import { scanPace } from './pace.js';
+import { yieldToEventLoop } from './pace.js';
 
 const ANALYZE_BATCH = 20;
 
@@ -67,11 +67,11 @@ export async function runAnalyzePhase(
         callbacks.onError(`${item.sourceRoot}/${item.relPath}: ${err instanceof Error ? err.message : String(err)}`);
       }
       callbacks.onScanned();
-      await scanPace();
     }));
 
     analyzed += batch.length;
     callbacks.onProgress(analyzed);
+    await yieldToEventLoop();
   }
 
   return analyzed;

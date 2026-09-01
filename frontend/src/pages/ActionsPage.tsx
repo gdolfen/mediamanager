@@ -56,21 +56,24 @@ export function ActionsPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadStatus = useCallback(async () => {
-    const [t, u, ta, th, r] = await Promise.allSettled([
+    const [t, u, ta, th] = await Promise.allSettled([
       api.transferStatus(),
       api.uploadScanStatus(),
       api.targetScanStatus(),
       api.thumbnailStatus(),
-      api.runHistory(),
     ]);
     if (t.status === 'fulfilled') setTransfer(t.value);
     if (u.status === 'fulfilled') setUploadScan(u.value);
     if (ta.status === 'fulfilled') setTargetScan(ta.value);
     if (th.status === 'fulfilled') setThumbnails(th.value);
-    if (r.status === 'fulfilled') setRuns(r.value);
   }, []);
 
-  useEffect(() => { loadStatus(); }, [loadStatus]);
+  const loadRuns = useCallback(async () => {
+    const r = await api.runHistory().catch(() => null);
+    if (r) setRuns(r);
+  }, []);
+
+  useEffect(() => { loadStatus(); loadRuns(); }, [loadStatus, loadRuns]);
 
   const transferRunning = transfer?.status === 'running';
   const uploadRunning = uploadScan?.status === 'running';
@@ -343,7 +346,7 @@ export function ActionsPage() {
           <CardContent>
             <Stack direction="row" alignItems="center" justifyContent="space-between">
               <Typography variant="h6" gutterBottom>Historie (Scans & Übertragungen)</Typography>
-              <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadStatus}>Aktualisieren</Button>
+              <Button variant="outlined" startIcon={<RefreshIcon />} onClick={() => { loadStatus(); loadRuns(); }}>Aktualisieren</Button>
             </Stack>
             <Table size="small">
               <TableHead>

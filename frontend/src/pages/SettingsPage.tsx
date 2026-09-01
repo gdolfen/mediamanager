@@ -24,6 +24,7 @@ import {
 import SaveIcon from '@mui/icons-material/Save';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import { api } from '../api/client';
+import { formatDateTime } from '../utils/date';
 import type { FormatInfo, ScheduleMode, ScheduleState } from '../types';
 
 export function SettingsPage({ onOpenFormat }: { onOpenFormat?: (ext: string) => void }) {
@@ -159,8 +160,8 @@ export function SettingsPage({ onOpenFormat }: { onOpenFormat?: (ext: string) =>
                 />
                 <Chip size="small" label={`Intervall: ${schedule.intervalMinutes} min`} />
                 <Chip size="small" label={schedule.mode === 'scan_and_transfer' ? 'Scan + Übertragung' : 'Nur Scan'} />
-                {schedule.lastRunAt && <Chip size="small" label={`Letzter Lauf: ${formatDate(schedule.lastRunAt)}`} />}
-                {schedule.nextRunAt && schedule.enabled && <Chip size="small" label={`Nächster Lauf: ${formatDate(schedule.nextRunAt)}`} />}
+                {schedule.lastRunAt && <Chip size="small" label={`Letzter Lauf: ${formatDateTime(schedule.lastRunAt)}`} />}
+                {schedule.nextRunAt && schedule.enabled && <Chip size="small" label={`Nächster Lauf: ${formatDateTime(schedule.nextRunAt)}`} />}
               </Stack>
             )}
           </CardContent>
@@ -211,6 +212,3 @@ export function SettingsPage({ onOpenFormat }: { onOpenFormat?: (ext: string) =>
   );
 }
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString('de-DE');
-}

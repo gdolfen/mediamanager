@@ -45,6 +45,7 @@ import { api } from '../api/client';
 import { MediaGallery } from '../components/MediaGallery';
 import { Thumbnail } from '../components/Thumbnail';
 import { deviceName as fileDeviceName } from '../components/MediaGallery';
+import { formatDate } from '../utils/date';
 import type { FileRecord, FileStatus, UploadGroup, IgnoredItem } from '../types';
 
 type ViewLevel = 'persons' | 'devices' | 'years' | 'files';
@@ -383,12 +384,6 @@ function GroupGrid({ groups, icon, emptyText, onPick }: {
       )}
     </Grid>
   );
-}
-
-function formatDate(iso: string | null): string {
-  if (!iso) return '–';
-  const d = new Date(iso);
-  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
 
 function UploadMediaTile({ file, onOpenImage, onOpenDevice, onToggleIgnore, onTransfer }: {

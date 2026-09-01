@@ -33,6 +33,7 @@ import DeviceUnknownIcon from '@mui/icons-material/DeviceUnknown';
 import FolderIcon from '@mui/icons-material/FolderOpen';
 import { api } from '../api/client';
 import { Thumbnail } from '../components/Thumbnail';
+import { formatDate } from '../utils/date';
 import type { Device, DeviceIdentifier, UnknownDeviceCandidate } from '../types';
 
 export function DevicesPage({ onOpenImage, onOpenDevice, onOpenIdentifier }: {
@@ -264,9 +265,9 @@ export function DevicesPage({ onOpenImage, onOpenDevice, onOpenIdentifier }: {
                     <TableCell>
                       {d.usagePeriod ? (
                         <Box>
-                          <Typography variant="body2" display="block">{fmtDate(d.usagePeriod.min)}</Typography>
+                          <Typography variant="body2" display="block">{formatDate(d.usagePeriod.min)}</Typography>
                           <Typography variant="body2" color="text.secondary">bis</Typography>
-                          <Typography variant="body2" display="block">{fmtDate(d.usagePeriod.max)}</Typography>
+                          <Typography variant="body2" display="block">{formatDate(d.usagePeriod.max)}</Typography>
                         </Box>
                       ) : (
                         <Typography variant="body2" color="text.secondary">Noch keine Dateien zugeordnet</Typography>
@@ -313,10 +314,7 @@ function identifierKindLabel(kind: DeviceIdentifier['kind']): string {
   }
 }
 
-function fmtDate(s: string | null): string {
-  if (!s) return '–';
-  return new Date(s).toLocaleDateString('de-DE');
-}
+
 
 function DeviceDialog({ device, onClose, onSaved }: { device: Device | null; onClose: () => void; onSaved: () => Promise<void> }) {
   const [mappedName, setMappedName] = useState(device?.mappedName ?? '');

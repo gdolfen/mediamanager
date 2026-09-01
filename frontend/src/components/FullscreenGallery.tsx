@@ -5,6 +5,7 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { mediaUrl } from '../api/client';
+import { formatDateTime } from '../utils/date';
 import type { FileRecord } from '../types';
 
 export function FullscreenGallery({ files, index, onIndexChange, onClose, onOpenDetails }: {
@@ -63,7 +64,7 @@ export function FullscreenGallery({ files, index, onIndexChange, onClose, onOpen
         {file && (
           <Typography variant="caption" sx={{ color: '#fff', px: 2, textAlign: 'center' }}>
             {file.originalName}
-            {file.takenAt ? ` · ${new Date(file.takenAt).toLocaleString('de-DE')}` : ''}
+            {file.takenAt ? ` · ${formatDateTime(file.takenAt)}` : ''}
           </Typography>
         )}
       </Box>

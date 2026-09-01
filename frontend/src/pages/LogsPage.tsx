@@ -25,6 +25,7 @@ import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { api } from '../api/client';
+import { formatDateTime } from '../utils/date';
 import type { LogEntry, LogLevel, LogPage, LogStats } from '../types';
 
 const LEVEL_COLOR: Record<LogLevel, 'success' | 'warning' | 'error' | 'default'> = {
@@ -144,7 +145,7 @@ export function LogsPage() {
               <TableBody>
                 {(data?.rows ?? []).map((row: LogEntry) => (
                   <TableRow key={row.id} sx={{ '&:hover': { bgcolor: 'action.hover' } }}>
-                    <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>{formatTime(row.ts)}</TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>{formatDateTime(row.ts)}</TableCell>
                     <TableCell>
                       <Chip size="small" label={row.level} color={LEVEL_COLOR[row.level]} />
                     </TableCell>
@@ -176,6 +177,3 @@ export function LogsPage() {
   );
 }
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleString('de-DE');
-}

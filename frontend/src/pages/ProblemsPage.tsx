@@ -28,6 +28,7 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '../api/client';
 import { Thumbnail } from '../components/Thumbnail';
+import { formatDateTime } from '../utils/date';
 import type { Problem, ProblemType, RecheckState } from '../types';
 
 export const TYPE_META: Record<ProblemType, { label: string; color: 'error' | 'warning' | 'info' | 'default' }> = {
@@ -237,7 +238,7 @@ export function ProblemsPage({ onStartTransfer }: { onStartTransfer: () => Promi
                         {p.file?.isWhatsApp && <Chip size="small" variant="outlined" color="success" label="WA" title="WhatsApp-Datei" sx={{ height: 18, fontSize: 10 }} />}
                       </Stack>
                     </TableCell>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>{p.file?.takenAt ? new Date(p.file.takenAt).toLocaleString('de-DE') : '–'}</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>{p.file?.takenAt ? formatDateTime(p.file.takenAt) : '–'}</TableCell>
                     <TableCell>
                       {p.resolved ? (
                         <Chip size="small" color="success" label="Gelöst" />

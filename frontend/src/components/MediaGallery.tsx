@@ -36,6 +36,7 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { Thumbnail } from './Thumbnail';
 import { FullscreenGallery } from './FullscreenGallery';
 import { TYPE_META } from '../pages/ProblemsPage';
+import { formatDate, formatDateTime } from '../utils/date';
 import type { FileRecord } from '../types';
 
 export type SortKey = 'takenAt' | 'originalName' | 'sourceSize' | 'status' | 'deviceName';
@@ -67,12 +68,6 @@ export function sortFiles(files: FileRecord[], key: SortKey, dir: SortDir): File
     }
     return r * mul;
   });
-}
-
-function formatDate(iso: string | null): string {
-  if (!iso) return '–';
-  const d = new Date(iso);
-  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
 
 function formatSize(bytes: number | null): string {
@@ -338,16 +333,15 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
 
 export function FileInfoCard({ file }: { file: FileRecord }) {
   const fmtSize = (bytes: number | null) => bytes == null ? '–' : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  const fmtDate = (iso: string | null) => iso ? new Date(iso).toLocaleString('de-DE') : '–';
 
   const fileRows: { key: string; value: string }[] = [];
   fileRows.push({ key: 'Datei', value: file.originalName });
   if (file.fileType) fileRows.push({ key: 'Typ', value: file.fileType === 'video' ? 'Video' : 'Bild' });
   fileRows.push({ key: 'Status', value: file.status });
   if (file.sourceSize != null) fileRows.push({ key: 'Größe', value: fmtSize(file.sourceSize) });
-  if (file.takenAt) fileRows.push({ key: 'Aufnahmedatum', value: fmtDate(file.takenAt) });
-  if (file.sourceMtime != null) fileRows.push({ key: 'Letzte Änderung', value: fmtDate(new Date(file.sourceMtime).toISOString()) });
-  fileRows.push({ key: 'Erstellt', value: fmtDate(file.createdAt) });
+  if (file.takenAt) fileRows.push({ key: 'Aufnahmedatum', value: formatDateTime(file.takenAt) });
+  if (file.sourceMtime != null) fileRows.push({ key: 'Letzte Änderung', value: formatDateTime(new Date(file.sourceMtime).toISOString()) });
+  fileRows.push({ key: 'Erstellt', value: formatDateTime(file.createdAt) });
   if (deviceName(file)) fileRows.push({ key: 'Gerät', value: deviceName(file) });
   if (file.make || file.model) fileRows.push({ key: 'Make/Model', value: `${file.make ?? ''} ${file.model ?? ''}`.trim() });
   fileRows.push({ key: 'Quelle', value: `${file.sourceRoot}: ${file.sourceRelPath}` });

@@ -27,6 +27,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import ImageIcon from '@mui/icons-material/Image';
 import { api } from '../api/client';
 import { useEta, formatEta } from '../hooks/useEta';
+import { formatDateTime } from '../utils/date';
 import type { RunKind, RunRecord, TargetScanState, ThumbnailStatus, TransferState, UploadScanState } from '../types';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -142,7 +143,7 @@ export function ActionsPage() {
             </Box>
             {transfer?.startedAt && (
               <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-                Gestartet: {formatDate(transfer.startedAt)}{transfer.finishedAt ? ` · Beendet: ${formatDate(transfer.finishedAt)}` : ''}
+                Gestartet: {formatDateTime(transfer.startedAt)}{transfer.finishedAt ? ` · Beendet: ${formatDateTime(transfer.finishedAt)}` : ''}
               </Typography>
             )}
             {transfer && transfer.errors.length > 0 && <ErrorList errors={transfer.errors} title="Fehler im letzten Lauf:" />}
@@ -356,8 +357,8 @@ export function ActionsPage() {
                     <TableCell>{r.id}</TableCell>
                     <TableCell>{KIND_LABEL[r.kind] ?? r.kind}</TableCell>
                     <TableCell><Chip size="small" label={STATUS_LABEL[r.status]} color={r.status === 'completed' ? 'success' : r.status === 'aborted' ? 'error' : 'warning'} /></TableCell>
-                    <TableCell>{formatDate(r.startedAt)}</TableCell>
-                    <TableCell>{r.finishedAt ? formatDate(r.finishedAt) : '–'}</TableCell>
+                    <TableCell>{formatDateTime(r.startedAt)}</TableCell>
+                    <TableCell>{r.finishedAt ? formatDateTime(r.finishedAt) : '–'}</TableCell>
                     <TableCell align="right">{r.scanned.toLocaleString('de-DE')}</TableCell>
                     <TableCell align="right">{progressLabel(r)}</TableCell>
                     <TableCell align="right">{r.skipped.toLocaleString('de-DE')}</TableCell>
@@ -412,6 +413,3 @@ function ErrorList({ errors, title }: { errors: string[]; title: string }) {
   );
 }
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString('de-DE');
-}

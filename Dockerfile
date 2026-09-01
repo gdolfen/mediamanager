@@ -17,6 +17,7 @@ FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
+ENV DATA_DIR=/data
 
 ARG VERSION=
 RUN if [ -n "$VERSION" ]; then printf '%s' "$VERSION" > /app/version.txt; fi

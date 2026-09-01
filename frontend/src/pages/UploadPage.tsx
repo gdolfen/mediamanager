@@ -32,7 +32,6 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorIcon from '@mui/icons-material/Error';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import BlockIcon from '@mui/icons-material/Block';
 import FolderOffIcon from '@mui/icons-material/FolderOff';
@@ -60,7 +59,7 @@ const STATUS_LABEL: Record<string, string> = {
 function statusIcon(status: FileStatus) {
   switch (status) {
     case 'transferred': return <CheckCircleIcon fontSize="small" sx={{ color: 'success.main' }} />;
-    case 'problem': return <ErrorIcon fontSize="small" sx={{ color: 'error.main' }} />;
+    case 'indexed': return <HourglassEmptyIcon fontSize="small" sx={{ color: 'info.main' }} />;
     case 'pending': return <HourglassEmptyIcon fontSize="small" sx={{ color: 'warning.main' }} />;
   }
 }
@@ -241,9 +240,9 @@ export function UploadPage({ onOpenImage, onOpenDevice }: {
                 <InputLabel>Status</InputLabel>
                 <Select value={status} label="Status" onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
                   <MenuItem value="">Alle</MenuItem>
+                  <MenuItem value="indexed">indexiert</MenuItem>
                   <MenuItem value="pending">offen</MenuItem>
                   <MenuItem value="transferred">übertragen</MenuItem>
-                  <MenuItem value="problem">Fehler</MenuItem>
                 </Select>
               </FormControl>
               <TextField size="small" label="Suche" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} sx={{ minWidth: 160 }} />
@@ -368,9 +367,9 @@ function GroupGrid({ groups, icon, emptyText, onPick }: {
                   {g.count.toLocaleString('de-DE')} Dateien · {g.images} Fotos · {g.videos} Videos
                 </Typography>
                 <Stack direction="row" spacing={0.5} sx={{ mt: 1 }} flexWrap="wrap" useFlexGap>
+                  {g.indexed > 0 && <Chip size="small" icon={<HourglassEmptyIcon />} label={`${g.indexed} indexiert`} color="info" variant="outlined" />}
                   {g.pending > 0 && <Chip size="small" icon={<HourglassEmptyIcon />} label={`${g.pending} offen`} color="warning" variant="outlined" />}
                   {g.transferred > 0 && <Chip size="small" icon={<CheckCircleIcon />} label={`${g.transferred}✓`} color="success" variant="outlined" />}
-                  {g.problem > 0 && <Chip size="small" icon={<ErrorIcon />} label={`${g.problem} ✗`} color="error" variant="outlined" />}
                 </Stack>
               </CardContent>
             </CardActionArea>

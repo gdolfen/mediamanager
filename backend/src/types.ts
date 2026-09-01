@@ -1,7 +1,7 @@
 export type FileType = 'image' | 'video' | 'other';
 export type DateSource = 'exif' | 'quicktime' | 'file' | 'filename' | 'override';
 export type OverrideSource = 'file' | 'meta' | 'filename';
-export type FileStatus = 'pending' | 'transferred' | 'problem';
+export type FileStatus = 'indexed' | 'pending' | 'transferred';
 export type ProblemType =
   | 'UNKNOWN_DEVICE'
   | 'NO_META_DATE'

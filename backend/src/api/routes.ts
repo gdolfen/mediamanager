@@ -283,7 +283,7 @@ api.get('/devices/:id/files', (req, res) => {
 api.get('/files', (req, res) => {
   const page = Math.max(1, Number(req.query.page ?? 1));
   const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 50)));
-  const status = typeof req.query.status === 'string' ? req.query.status as 'pending' | 'transferred' | 'problem' : undefined;
+  const status = typeof req.query.status === 'string' ? req.query.status as 'indexed' | 'pending' | 'transferred' : undefined;
   const root = typeof req.query.root === 'string' ? req.query.root as 'upload' | 'fotos' | 'videos' : undefined;
   const sourceRoot = typeof req.query.sourceRoot === 'string' ? req.query.sourceRoot as 'upload' | 'fotos' | 'videos' : undefined;
   const type = typeof req.query.type === 'string' ? req.query.type as 'image' | 'video' : undefined;

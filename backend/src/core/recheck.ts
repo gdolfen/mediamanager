@@ -12,7 +12,7 @@ import {
   updateRun,
 } from '../db/daos.js';
 import { evaluateFile } from './evaluator.js';
-import { processLibraryFile } from './libraryScan.js';
+import { analyzeLibraryFile } from './libraryScan.js';
 import { tryAcquire, release } from './active.js';
 import { scanPace } from './pace.js';
 import { pathExists } from './paths.js';
@@ -181,7 +181,7 @@ async function recheckFile(file: FileRecord): Promise<void> {
       },
     });
   } else {
-    await processLibraryFile(file.sourceRoot as 'fotos' | 'videos', base, scanned, (fileId, type, _msg, isNew) => {
+    await analyzeLibraryFile(file.sourceRoot as 'fotos' | 'videos', base, scanned, (fileId: number, type: ProblemType, _msg: string, isNew: boolean) => {
       reported.add(type);
       if (isNew) state.created++;
     });

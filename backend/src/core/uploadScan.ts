@@ -7,10 +7,9 @@ import {
   getScanProgress,
   clearScanProgress,
   resetScanQueue,
-  enqueueScanFile,
-  nextPendingScanFiles,
-  markScanFileDone,
-  pendingScanCount,
+  nextIndexedFiles,
+  indexedCount,
+  upsertFile,
   startRun,
   updateRun,
 } from '../db/daos.js';
@@ -19,15 +18,20 @@ import { evaluateFile, isSettledFile } from './evaluator.js';
 import { validatePaths } from './transfer.js';
 import { tryAcquire, release } from './active.js';
 import { scanPace } from './pace.js';
+import { detectFileType, extOf } from './naming.js';
+import { isWhatsAppFilename } from './dates.js';
+import { isSupportedExt } from '../types.js';
 import { logger } from '../db/logger.js';
 
 export interface UploadScanState {
   status: 'idle' | 'running' | 'completed' | 'aborted';
   runId: number | null;
+  phase: 'walk' | 'analyze';
   totalDirs: number;
   totalFiles: number;
   scanned: number;
   indexed: number;
+  analyzed: number;
   skipped: number;
   problems: number;
   currentFile: string | null;
@@ -39,10 +43,12 @@ export interface UploadScanState {
 const state: UploadScanState = {
   status: 'idle',
   runId: null,
+  phase: 'walk',
   totalDirs: 0,
   totalFiles: 0,
   scanned: 0,
   indexed: 0,
+  analyzed: 0,
   skipped: 0,
   problems: 0,
   currentFile: null,
@@ -54,6 +60,7 @@ const state: UploadScanState = {
 let abortRequested = false;
 
 const WALK_MARKER = 'walk:upload';
+const ANALYZE_MARKER = 'analyze';
 
 /** Relatives Verzeichnis (posix) einer Datei; '' für die Wurzel. */
 function dirOf(rel: string): string {
@@ -90,27 +97,31 @@ export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; err
     const run = p.runId != null ? { id: p.runId } : startRun('uploadScan');
     state.status = 'running';
     state.runId = run.id;
+    state.phase = p.current?.startsWith(ANALYZE_MARKER) ? 'analyze' : 'walk';
     state.totalDirs = p.totalDirs;
     state.totalFiles = p.totalFiles;
     state.scanned = p.scanned;
     state.indexed = p.indexed;
+    state.analyzed = 0;
     state.skipped = p.skipped;
     state.problems = p.problems;
     state.currentFile = null;
     state.errors = [];
     state.startedAt = p.startedAt;
     state.finishedAt = null;
-    logger.info('scan', `Upload-Scan wird fortgesetzt (${p.scanned} gescannt, ${p.indexed} indexiert, ${p.skipped} übersprungen, ${pendingScanCount('upload')} ausstehend).`);
+    logger.info('scan', `Upload-Scan wird fortgesetzt (Phase: ${state.phase}, ${p.scanned} gescannt, ${p.indexed} indexiert, ${p.skipped} übersprungen).`);
   } else {
     resetScanQueue('upload');
     const run = startRun('uploadScan');
     saveScanProgress('upload', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, indexed: 0, skipped: 0, problems: 0, current: null, runId: run.id });
     state.status = 'running';
     state.runId = run.id;
+    state.phase = 'walk';
     state.totalDirs = 0;
     state.totalFiles = 0;
     state.scanned = 0;
     state.indexed = 0;
+    state.analyzed = 0;
     state.skipped = 0;
     state.problems = 0;
     state.currentFile = null;
@@ -149,13 +160,134 @@ function finishUploadScan(resultDirs: number, resultFiles: number): void {
   }
   if (state.status === 'completed') {
     clearScanProgress('upload');
-    resetScanQueue('upload');
-    logger.info('scan', `Upload-Scan abgeschlossen: ${resultDirs} Ordner, ${resultFiles} Dateien, ${state.scanned} gescannt, ${state.indexed} indexiert, ${state.skipped} übersprungen, ${state.problems} Probleme.`);
+    logger.info('scan', `Upload-Scan abgeschlossen: ${resultDirs} Ordner, ${resultFiles} Dateien, ${state.scanned} gescannt, ${state.indexed} indexiert, ${state.analyzed} analysiert, ${state.skipped} übersprungen, ${state.problems} Probleme.`);
   } else {
     saveScanProgress('upload', { status: 'aborted', finishedAt: new Date().toISOString(), indexed: state.indexed, skipped: state.skipped, problems: state.problems });
-    logger.warn('scan', `Upload-Scan abgebrochen: ${state.scanned} gescannt, ${state.indexed} indexiert, ${state.skipped} übersprungen. Fortsetzen möglich.`);
+    logger.warn('scan', `Upload-Scan abgebrochen: ${state.scanned} gescannt, ${state.indexed} indexiert, ${state.analyzed} analysiert, ${state.skipped} übersprungen. Fortsetzen möglich.`);
   }
   release('uploadScan');
+}
+
+/** Phase 1: Walk the filesystem and index files (fast metadata only). */
+async function runWalkPhase(uploadBase: string, resume: boolean): Promise<boolean> {
+  let skipDirsBefore: string | undefined;
+  if (resume) {
+    const cur = getScanProgress('upload')?.current ?? null;
+    if (cur?.startsWith(`${WALK_MARKER}@`)) {
+      const d = cur.slice(WALK_MARKER.length + 1);
+      if (d) skipDirsBefore = d;
+    }
+  }
+
+  const result = await scanUpload(uploadBase, async (f, stats) => {
+    if (abortRequested) return;
+    state.totalDirs = stats.dirs;
+    state.totalFiles = stats.files;
+    state.currentFile = f.relPath;
+
+    // Fast metadata: stat data already available from walkTree
+    const ext = extOf(path.basename(f.absPath));
+    const fileType = detectFileType(ext);
+    const originalName = path.basename(f.absPath).replace(/\\/g, '/');
+    const isWhatsApp = isWhatsAppFilename(originalName);
+
+    // Upsert with status='indexed' – no hash, no EXIF, no thumbnail yet
+    upsertFile({
+      sourceRoot: 'upload',
+      hash: null,
+      md5: null,
+      sourceRelPath: f.relPath,
+      sourceSize: f.size,
+      sourceMtime: Math.floor(f.mtimeMs),
+      fileType: fileType ?? 'other',
+      ext,
+      originalName,
+      targetRoot: null,
+      targetRelPath: null,
+      deviceId: null,
+      deviceRaw: null,
+      make: null,
+      model: null,
+      takenAt: null,
+      dateSource: 'file',
+      overrideDate: null,
+      overrideSource: null,
+      status: isSupportedExt(ext) ? 'indexed' : 'pending',
+      isWhatsApp,
+      meta: null,
+    });
+
+    state.indexed++;
+    if (state.totalFiles % 50 === 0) {
+      persistUploadProgress(`${WALK_MARKER}@${dirOf(f.relPath)}`);
+      await scanPace();
+    }
+  }, () => abortRequested, {
+    skipDirsBefore,
+    onDir: (relDir) => persistUploadProgress(`${WALK_MARKER}@${relDir}`),
+  });
+
+  state.totalDirs = result.dirs;
+  state.totalFiles = result.files;
+  persistUploadProgress(`${ANALYZE_MARKER}:0`);
+  return !abortRequested;
+}
+
+/** Phase 2: Analyze indexed files (hash, EXIF, device, thumbnail). */
+async function runAnalyzePhase(): Promise<void> {
+  const ANALYZE_BATCH = 4;
+  let analyzed = 0;
+
+  while (!abortRequested) {
+    const batch = nextIndexedFiles('upload', ANALYZE_BATCH);
+    if (!batch.length) break;
+
+    // Process batch in parallel
+    await Promise.all(batch.map(async (item) => {
+      if (abortRequested) return;
+      const abs = path.join(rootBase('upload'), item.relPath);
+      state.currentFile = item.relPath;
+      try {
+        const stat = await fs.promises.stat(abs);
+        if (!stat.isFile()) {
+          state.scanned++;
+          return;
+        }
+        const nowMtime = Math.floor(stat.mtimeMs);
+        if (isSettledFile(getFileBySource(item.relPath), stat.size, nowMtime)) {
+          state.skipped++;
+          state.scanned++;
+          return;
+        }
+        const scanned = {
+          absPath: abs,
+          relPath: item.relPath,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          birthtimeMs: stat.birthtimeMs > 0 ? stat.birthtimeMs : null,
+        };
+        const evaluation = await evaluateFile(scanned, {
+          onProblem: (_fileId, _type, _message, isNew) => {
+            if (isNew) state.problems++;
+          },
+        });
+        if (evaluation.reason === 'duplicate' || evaluation.reason === 'already-transferred') {
+          state.skipped++;
+        } else {
+          state.analyzed++;
+        }
+      } catch (err) {
+        const msg = `${item.relPath}: ${err instanceof Error ? err.message : String(err)}`;
+        state.errors.push(msg);
+        logger.error('scan', msg);
+      }
+      state.scanned++;
+    }));
+
+    analyzed += batch.length;
+    if (analyzed % 20 === 0) persistUploadProgress(`${ANALYZE_MARKER}:${analyzed}`);
+    await scanPace();
+  }
 }
 
 async function runUploadScanInternal(resume: boolean): Promise<void> {
@@ -163,102 +295,25 @@ async function runUploadScanInternal(resume: boolean): Promise<void> {
   let resultDirs = 0;
   let resultFiles = 0;
   try {
-    let walkDone = false;
-    let skipDirsBefore: string | undefined;
-    if (resume) {
-      const cur = getScanProgress('upload')?.current ?? null;
-      if (cur === 'walked' || cur?.startsWith('file:')) {
-        walkDone = true; // Walk war abgeschlossen – direkt zur Abarbeitung der Queue.
-      } else if (cur?.startsWith(`${WALK_MARKER}@`)) {
-        const d = cur.slice(WALK_MARKER.length + 1);
-        if (d) skipDirsBefore = d; // Walk ab diesem Verzeichnis fortsetzen.
-      }
-      // current == null oder 'walk:upload' → Walk von Anfang (bereits eingereihte Dateien dedupliziert die Queue).
-    }
-    if (!walkDone) {
-      const result = await scanUpload(uploadBase, async (f, stats) => {
-        if (abortRequested) return;
-        state.totalDirs = stats.dirs;
-        state.totalFiles = stats.files;
-        state.currentFile = f.relPath;
-        enqueueScanFile('upload', 'upload', f.relPath);
-        if (state.totalFiles % 50 === 0) {
-          persistUploadProgress(`${WALK_MARKER}@${dirOf(f.relPath)}`);
-          await scanPace();
-        }
-      }, () => abortRequested, {
-        skipDirsBefore,
-        onDir: (relDir) => persistUploadProgress(`${WALK_MARKER}@${relDir}`),
-      });
-      resultDirs = result.dirs;
-      resultFiles = result.files;
-      state.totalDirs = resultDirs;
-      state.totalFiles = resultFiles;
-      persistUploadProgress('walked');
-      if (abortRequested) {
+    // Phase 1: Walk (if not already done)
+    if (state.phase === 'walk') {
+      const walkOk = await runWalkPhase(uploadBase, resume);
+      if (!walkOk || abortRequested) {
         state.status = 'aborted';
         finishUploadScan(resultDirs, resultFiles);
         return;
       }
-      if (pendingScanCount('upload') === 0) {
+      state.phase = 'analyze';
+      if (indexedCount('upload') === 0) {
         state.status = 'completed';
         finishUploadScan(resultDirs, resultFiles);
         return;
       }
     }
-    while (!abortRequested) {
-      const batch = nextPendingScanFiles('upload', 10);
-      if (!batch.length) break;
-      for (const item of batch) {
-        if (abortRequested) break;
-        const abs = path.join(uploadBase, item.relPath);
-        state.currentFile = item.relPath;
-        try {
-          const stat = await fs.promises.stat(abs);
-          if (!stat.isFile()) {
-            state.scanned++;
-            markScanFileDone(item.id);
-            await scanPace();
-            continue;
-          }
-          const nowMtime = Math.floor(stat.mtimeMs);
-          if (isSettledFile(getFileBySource(item.relPath), stat.size, nowMtime)) {
-            // Bereits vollständig übertragen und unverändert – beim erneuten Scan überspringen.
-            state.skipped++;
-            state.scanned++;
-            markScanFileDone(item.id);
-            await scanPace();
-            continue;
-          }
-          const scanned = {
-            absPath: abs,
-            relPath: item.relPath,
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
-            birthtimeMs: stat.birthtimeMs > 0 ? stat.birthtimeMs : null,
-          };
-          const evaluation = await evaluateFile(scanned, {
-            onProblem: (_fileId, _type, _message, isNew) => {
-              if (isNew) state.problems++;
-            },
-          });
-          if (abortRequested) break;
-          if (evaluation.reason === 'duplicate' || evaluation.reason === 'already-transferred') {
-            state.skipped++;
-          } else {
-            state.indexed++;
-          }
-        } catch (err) {
-          const msg = `${item.relPath}: ${err instanceof Error ? err.message : String(err)}`;
-          state.errors.push(msg);
-          logger.error('scan', msg);
-        }
-        state.scanned++;
-        markScanFileDone(item.id);
-        if (state.scanned % 25 === 0) persistUploadProgress(`file:${state.currentFile}`);
-        await scanPace();
-      }
-    }
+
+    // Phase 2: Analyze
+    await runAnalyzePhase();
+
     state.status = abortRequested ? 'aborted' : 'completed';
   } catch (err) {
     state.status = 'aborted';

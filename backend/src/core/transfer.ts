@@ -204,7 +204,6 @@ async function transferFile(file: ScannedFile, evaluation: EvaluationResult): Pr
     await fs.promises.rename(tmp, targetAbs);
   } catch (err) {
     try { await fs.promises.rm(tmp, { force: true }); } catch { /* ignore */ }
-    updateFile(fileId, { status: 'problem' });
     countProblem(true);
     return;
   }

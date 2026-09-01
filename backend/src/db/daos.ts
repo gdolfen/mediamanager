@@ -263,7 +263,7 @@ export function listFiles(opts: {
 
 export function countFilesByStatus(): Record<FileStatus, number> {
   const rows = getDb().prepare('SELECT status, COUNT(*) AS c FROM files GROUP BY status').all() as Row[];
-  const out: Record<FileStatus, number> = { pending: 0, transferred: 0, problem: 0 };
+  const out: Record<FileStatus, number> = { indexed: 0, pending: 0, transferred: 0 };
   for (const r of rows) out[r.status as FileStatus] = r.c as number;
   return out;
 }
@@ -437,6 +437,25 @@ export function markScanFileDone(id: number): void {
 
 export function pendingScanCount(scanType: string): number {
   return (getDb().prepare('SELECT COUNT(*) AS c FROM scan_queue WHERE scan_type = ? AND done = 0').get(scanType) as Row).c as number;
+}
+
+export interface IndexedFile {
+  id: number;
+  sourceRoot: string;
+  relPath: string;
+}
+
+/** Get files with status='indexed' that need analysis (Phase 2). */
+export function nextIndexedFiles(sourceRoot: string, limit = 4): IndexedFile[] {
+  const rows = getDb().prepare(
+    'SELECT id, source_root, source_rel_path FROM files WHERE source_root = ? AND status = ? ORDER BY id LIMIT ?'
+  ).all(sourceRoot, 'indexed', limit) as Row[];
+  return rows.map((r) => ({ id: r.id as number, sourceRoot: r.source_root as string, relPath: r.source_rel_path as string }));
+}
+
+/** Count files with status='indexed' that need analysis. */
+export function indexedCount(sourceRoot: string): number {
+  return (getDb().prepare('SELECT COUNT(*) AS c FROM files WHERE source_root = ? AND status = ?').get(sourceRoot, 'indexed') as Row).c as number;
 }
 
 /* ---------- problems ---------- */
@@ -683,7 +702,6 @@ export function assignDeviceToFiles(deviceId: number, deviceRaw: string, fileIds
       UPDATE files SET
         device_id = ?,
         device_raw = ?,
-        status = CASE WHEN source_root = 'upload' AND status = 'problem' THEN 'pending' ELSE status END,
         updated_at = datetime('now')
       WHERE id IN (${placeholders})
     `)
@@ -697,7 +715,7 @@ export function findFileIdsByIdentifier(kind: DeviceIdentifier['kind'], identifi
   const rows = getDb().prepare(`
     SELECT id, make, model, source_rel_path, source_root FROM files
     WHERE device_id IS NULL
-      AND ((source_root = 'upload' AND status IN ('pending','problem')) OR source_root IN ('fotos','videos'))
+      AND ((source_root = 'upload' AND status IN ('indexed','pending')) OR source_root IN ('fotos','videos'))
   `).all() as Row[];
   return rows
     .filter((r) => {
@@ -1018,7 +1036,7 @@ export interface UploadGroup {
   videos: number;
   pending: number;
   transferred: number;
-  problem: number;
+  indexed: number;
 }
 
 function resolvePerson(f: Row): string {
@@ -1117,7 +1135,7 @@ export function listUploadHierarchy(level: 1 | 2 | 3, filters: { person?: string
     return 'Unbekanntes Gerät';
   }
 
-  const groups = new Map<string, { label: string; path: string; count: number; images: number; videos: number; pending: number; transferred: number; problem: number }>();
+  const groups = new Map<string, { label: string; path: string; count: number; images: number; videos: number; pending: number; transferred: number; indexed: number }>();
 
   for (const f of files) {
     const relPath = f.source_rel_path as string;
@@ -1138,15 +1156,15 @@ export function listUploadHierarchy(level: 1 | 2 | 3, filters: { person?: string
     }
 
     if (!groups.has(key)) {
-      groups.set(key, { label, path: resolvePath(f, level), count: 0, images: 0, videos: 0, pending: 0, transferred: 0, problem: 0 });
+      groups.set(key, { label, path: resolvePath(f, level), count: 0, images: 0, videos: 0, indexed: 0, pending: 0, transferred: 0 });
     }
     const g = groups.get(key)!;
     g.count++;
     if (f.file_type === 'image') g.images++;
     else if (f.file_type === 'video') g.videos++;
-    if (f.status === 'pending') g.pending++;
+    if (f.status === 'indexed') g.indexed++;
+    else if (f.status === 'pending') g.pending++;
     else if (f.status === 'transferred') g.transferred++;
-    else if (f.status === 'problem') g.problem++;
   }
 
   return Array.from(groups.entries())

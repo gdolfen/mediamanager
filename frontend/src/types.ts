@@ -1,5 +1,5 @@
 export type FileType = 'image' | 'video' | 'other';
-export type FileStatus = 'pending' | 'transferred' | 'problem';
+export type FileStatus = 'indexed' | 'pending' | 'transferred';
 export type ProblemType =
   | 'UNKNOWN_DEVICE'
   | 'NO_META_DATE'
@@ -253,7 +253,7 @@ export interface UploadGroup {
   count: number;
   images: number;
   videos: number;
+  indexed: number;
   pending: number;
   transferred: number;
-  problem: number;
 }

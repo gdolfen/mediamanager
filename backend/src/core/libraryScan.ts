@@ -14,10 +14,8 @@ import {
   getScanProgress,
   clearScanProgress,
   resetScanQueue,
-  enqueueScanFile,
-  nextPendingScanFiles,
-  markScanFileDone,
-  pendingScanCount,
+  nextIndexedFiles,
+  indexedCount,
   startRun,
   updateRun,
 } from '../db/daos.js';
@@ -37,6 +35,7 @@ import { logger } from '../db/logger.js';
 export interface TargetScanState {
   status: 'idle' | 'running' | 'completed' | 'aborted';
   runId: number | null;
+  phase: 'walk' | 'analyze';
   totalDirs: number;
   totalFiles: number;
   scanned: number;
@@ -52,6 +51,7 @@ export interface TargetScanState {
 const state: TargetScanState = {
   status: 'idle',
   runId: null,
+  phase: 'walk',
   totalDirs: 0,
   totalFiles: 0,
   scanned: 0,
@@ -72,6 +72,9 @@ const LIBRARY_PROBLEM_TYPES: ProblemType[] = [
   'LIBRARY_PATH_MISMATCH',
   'FILE_MTIME_BEFORE_BIRTHTIME',
 ];
+
+const WALK_MARKER = 'walk';
+const ANALYZE_MARKER = 'analyze';
 
 /** Relatives Verzeichnis (posix) einer Datei; '' für die Wurzel. */
 function dirOf(rel: string): string {
@@ -103,6 +106,7 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
     const run = p.runId != null ? { id: p.runId } : startRun('targetScan');
     state.status = 'running';
     state.runId = run.id;
+    state.phase = p.current?.startsWith(ANALYZE_MARKER) ? 'analyze' : 'walk';
     state.totalDirs = p.totalDirs;
     state.totalFiles = p.totalFiles;
     state.scanned = p.scanned;
@@ -113,13 +117,14 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
     state.errors = [];
     state.startedAt = p.startedAt;
     state.finishedAt = null;
-    logger.info('scan', `Zielordner-Scan wird fortgesetzt (${p.scanned} gescannt, ${p.linked} verknüpft, ${p.newFilesCount} neu, ${pendingScanCount('target')} ausstehend).`);
+    logger.info('scan', `Zielordner-Scan wird fortgesetzt (Phase: ${state.phase}, ${p.scanned} gescannt, ${p.linked} verknüpft, ${p.newFilesCount} neu).`);
   } else {
     resetScanQueue('target');
     const run = startRun('targetScan');
     saveScanProgress('target', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, linked: 0, newFilesCount: 0, problems: 0, current: null, runId: run.id });
     state.status = 'running';
     state.runId = run.id;
+    state.phase = 'walk';
     state.totalDirs = 0;
     state.totalFiles = 0;
     state.scanned = 0;
@@ -162,7 +167,6 @@ function finishTargetScan(): void {
   }
   if (state.status === 'completed') {
     clearScanProgress('target');
-    resetScanQueue('target');
     logger.info('scan', `Zielordner-Scan abgeschlossen: ${state.scanned} gescannt, ${state.linked} verknüpft, ${state.newFiles} neu, ${state.problems} Probleme.`);
   } else {
     saveScanProgress('target', { status: 'aborted', finishedAt: new Date().toISOString(), linked: state.linked, newFilesCount: state.newFiles, problems: state.problems });
@@ -171,111 +175,89 @@ function finishTargetScan(): void {
   release('targetScan');
 }
 
-async function runTargetScanInternal(resume: boolean): Promise<void> {
-  const roots = ['fotos', 'videos'] as const;
-  try {
-    let cumDirs = 0;
-    let cumFiles = 0;
-    // Resume-Logik: Wo wurde der Scan unterbrochen?
-    let startIdx = 0;
-    let walkDone = false;
-    const skipDirs = new Map<string, string>();
-    if (resume) {
-      const cur = getScanProgress('target')?.current ?? null;
-      if (cur === 'walked' || cur?.startsWith('file:')) {
-        startIdx = roots.length; // Walk war abgeschlossen – direkt zur Abarbeitung.
-        walkDone = true;
-      } else if (cur?.startsWith('walk:')) {
-        // Marker-Format: 'walk:<root>' oder 'walk:<root>@<verzeichnis>'
-        const marker = cur.slice(5);
-        const at = marker.indexOf('@');
-        const rootPart = at === -1 ? marker : marker.slice(0, at);
-        startIdx = Math.max(0, roots.indexOf(rootPart as (typeof roots)[number]));
-        if (at !== -1) {
-          const dirPart = marker.slice(at + 1);
-          if (dirPart) skipDirs.set(rootPart, dirPart); // Walk ab diesem Verzeichnis fortsetzen.
-        }
+/** Phase 1: Walk the filesystem and index files (fast metadata only). */
+async function runWalkPhase(roots: readonly ('fotos' | 'videos')[], resume: boolean): Promise<boolean> {
+  let cumDirs = 0;
+  let cumFiles = 0;
+  let startIdx = 0;
+  const skipDirs = new Map<string, string>();
+
+  if (resume) {
+    const cur = getScanProgress('target')?.current ?? null;
+    if (cur?.startsWith(WALK_MARKER)) {
+      const marker = cur.slice(WALK_MARKER.length + 1);
+      const at = marker.indexOf('@');
+      const rootPart = at === -1 ? marker : marker.slice(0, at);
+      startIdx = Math.max(0, roots.indexOf(rootPart as (typeof roots)[number]));
+      if (at !== -1) {
+        const dirPart = marker.slice(at + 1);
+        if (dirPart) skipDirs.set(rootPart, dirPart);
       }
-      // current == null → Walk war noch nicht begonnen → alles neu laufen lassen.
     }
-    if (!walkDone) {
-      for (let i = startIdx; i < roots.length; i++) {
-        const root = roots[i];
-        const base = rootBase(root);
-        if (!fs.existsSync(base)) continue;
-        const result = await walkTree(base, async (file, stats) => {
-          if (abortRequested) return;
-          state.totalDirs = cumDirs + stats.dirs;
-          state.totalFiles = cumFiles + stats.files;
-          state.currentFile = `${root}/${file.relPath}`;
-          enqueueScanFile('target', root, file.relPath);
-          if (state.totalFiles % 50 === 0) {
-            persistTargetProgress(`walk:${root}@${dirOf(file.relPath)}`);
-            await scanPace();
-          }
-        }, () => abortRequested, {
-          skipDirsBefore: skipDirs.get(root),
-          onDir: (relDir) => persistTargetProgress(`walk:${root}@${relDir}`),
+  }
+
+  for (let i = startIdx; i < roots.length; i++) {
+    const root = roots[i];
+    const base = rootBase(root);
+    if (!fs.existsSync(base)) continue;
+    const result = await walkTree(base, async (file, stats) => {
+      if (abortRequested) return;
+      state.totalDirs = cumDirs + stats.dirs;
+      state.totalFiles = cumFiles + stats.files;
+      state.currentFile = `${root}/${file.relPath}`;
+
+      // Fast metadata: stat data already available from walkTree
+      const ext = extOf(path.basename(file.absPath));
+      const fileType = detectFileType(ext);
+      const originalName = path.basename(file.absPath);
+      const isWhatsApp = isWhatsAppFilename(originalName);
+
+      if (fileType && isSupportedExt(ext)) {
+        // Index library file with status='indexed'
+        upsertFile({
+          sourceRoot: root,
+          hash: null,
+          md5: null,
+          sourceRelPath: file.relPath,
+          sourceSize: file.size,
+          sourceMtime: Math.floor(file.mtimeMs),
+          fileType,
+          ext,
+          originalName,
+          targetRoot: null,
+          targetRelPath: null,
+          deviceId: null,
+          deviceRaw: null,
+          make: null,
+          model: null,
+          takenAt: null,
+          dateSource: 'file',
+          overrideDate: null,
+          overrideSource: null,
+          status: 'indexed',
+          isWhatsApp,
+          meta: null,
         });
-        cumDirs += result.dirs;
-        cumFiles += result.files;
-        state.totalDirs = cumDirs;
-        state.totalFiles = cumFiles;
-        persistTargetProgress(`walk:${root}`);
-        logger.info('scan', `Zielordner-Scan: ${result.dirs} Ordner, ${result.files} Dateien in "${root}" gefunden.`);
-        if (abortRequested) break;
       }
-      persistTargetProgress('walked');
-      if (abortRequested) {
-        state.status = 'aborted';
-        finishTargetScan();
-        return;
-      }
-      if (pendingScanCount('target') === 0) {
-        state.status = 'completed';
-        finishTargetScan();
-        return;
-      }
-    }
-    while (!abortRequested) {
-      const batch = nextPendingScanFiles('target', 10);
-      if (!batch.length) break;
-      for (const item of batch) {
-        if (abortRequested) break;
-        const root = item.root as 'fotos' | 'videos';
-        const base = rootBase(root);
-        const abs = path.join(base, item.relPath);
-        state.currentFile = `${root}/${item.relPath}`;
-        try {
-          const stat = await fs.promises.stat(abs);
-          if (stat.isFile()) {
-            await processLibraryFile(root, base, {
-              absPath: abs,
-              relPath: item.relPath,
-              size: stat.size,
-              mtimeMs: stat.mtimeMs,
-              birthtimeMs: stat.birthtimeMs > 0 ? stat.birthtimeMs : null,
-            });
-          }
-        } catch (err) {
-          const msg = `${root}/${item.relPath}: ${err instanceof Error ? err.message : String(err)}`;
-          state.errors.push(msg);
-          logger.error('scan', msg);
-        }
-        state.scanned++;
-        markScanFileDone(item.id);
-        if (state.scanned % 25 === 0) persistTargetProgress(`file:${state.currentFile}`);
+
+      if (state.totalFiles % 50 === 0) {
+        persistTargetProgress(`${WALK_MARKER}:${root}@${dirOf(file.relPath)}`);
         await scanPace();
       }
-    }
-    state.status = abortRequested ? 'aborted' : 'completed';
-  } catch (err) {
-    state.status = 'aborted';
-    const msg = err instanceof Error ? err.message : String(err);
-    state.errors.push(msg);
-    logger.error('scan', `Zielordner-Scan fehlgeschlagen: ${msg}`);
+    }, () => abortRequested, {
+      skipDirsBefore: skipDirs.get(root),
+      onDir: (relDir) => persistTargetProgress(`${WALK_MARKER}:${root}@${relDir}`),
+    });
+    cumDirs += result.dirs;
+    cumFiles += result.files;
+    state.totalDirs = cumDirs;
+    state.totalFiles = cumFiles;
+    persistTargetProgress(`${WALK_MARKER}:${root}`);
+    logger.info('scan', `Zielordner-Scan: ${result.dirs} Ordner, ${result.files} Dateien in "${root}" gefunden.`);
+    if (abortRequested) break;
   }
-  finishTargetScan();
+  persistTargetProgress(`${ANALYZE_MARKER}:0`);
+  return !abortRequested;
 }
 
 function reportProblem(fileId: number, type: ProblemType, message: string, onProblem?: (fileId: number, type: ProblemType, message: string, isNew: boolean) => void): void {
@@ -291,7 +273,8 @@ function reportProblem(fileId: number, type: ProblemType, message: string, onPro
   onProblem?.(fileId, type, message, active);
 }
 
-export async function processLibraryFile(
+/** Analyze a single library file: hash, EXIF, device, consistency checks, upload linking. */
+export async function analyzeLibraryFile(
   root: 'fotos' | 'videos',
   base: string,
   file: ScannedFile,
@@ -304,10 +287,7 @@ export async function processLibraryFile(
   const reusable = existing != null && existing.sourceSize === file.size && existing.sourceMtime === nowMtime;
 
   const fileType = detectFileType(ext);
-  if (!fileType || !isSupportedExt(ext)) {
-    // Ignore unsupported files in the library tree (not part of the media library).
-    return;
-  }
+  if (!fileType || !isSupportedExt(ext)) return;
 
   /* hash */
   let hash = reusable ? existing.hash : null;
@@ -324,7 +304,6 @@ export async function processLibraryFile(
   let metaDate: string | null = reusable && existing.dateSource !== 'file' ? existing.takenAt : null;
   let meta: Record<string, unknown> | null = existing?.meta ?? null;
   if (!reusable || (existing != null && existing.meta == null)) {
-    // Metadaten nachlesen, wenn die Datei noch keinen Blob hat (Backfill vor meta_json).
     if (fileType === 'image') {
       const m = await readImageMeta(file.absPath);
       make = m.make;
@@ -342,14 +321,12 @@ export async function processLibraryFile(
 
   const filenameDate = parseDateFromFilename(originalName);
   const isWhatsApp = isWhatsAppFilename(originalName);
-  // Referenz für die Analyse ist die Datei-Erstellzeit (birthtime) statt der
-  // Änderungszeit (mtime). Fallback auf mtime, falls das Dateisystem keine liefert.
   const birthMs = file.birthtimeMs != null && file.birthtimeMs > 0 ? file.birthtimeMs : null;
   const fileDateIso = toLocalIso(new Date(birthMs ?? nowMtime));
   const takenAt = metaDate ?? (filenameDate ? toLocalIso(filenameDate) : fileDateIso);
   const dateSource: FileRecord['dateSource'] = metaDate ? (fileType === 'image' ? 'exif' : 'quicktime') : filenameDate ? 'filename' : 'file';
 
-  /* device: EXIF-Geräteinfo zuerst (auch für bereits übertragene Dateien), sonst Dateiname */
+  /* device */
   let devRes = resolveByExif(make, model);
   if (!devRes.device) devRes = resolveByFilename(originalName);
 
@@ -413,18 +390,101 @@ export async function processLibraryFile(
   }
 
   /* link matching upload file as imported */
-  const uploadRec = getUploadFileByHash(hash);
-  if (uploadRec && uploadRec.status !== 'transferred') {
-    updateFile(uploadRec.id, {
-      status: 'transferred',
-      targetRoot: root,
-      targetRelPath: file.relPath,
-      transferredAt: new Date().toISOString(),
-    });
-    state.linked++;
-  } else if (!uploadRec) {
-    state.newFiles++;
+  if (hash) {
+    const uploadRec = getUploadFileByHash(hash);
+    if (uploadRec && uploadRec.status !== 'transferred') {
+      updateFile(uploadRec.id, {
+        status: 'transferred',
+        targetRoot: root,
+        targetRelPath: file.relPath,
+        transferredAt: new Date().toISOString(),
+      });
+      state.linked++;
+    } else if (!uploadRec) {
+      state.newFiles++;
+    }
   }
+}
+
+/** Phase 2: Analyze indexed files (hash, EXIF, device, consistency, linking). */
+async function runAnalyzePhase(roots: readonly ('fotos' | 'videos')[]): Promise<void> {
+  const ANALYZE_BATCH = 4;
+  let analyzed = 0;
+
+  while (!abortRequested) {
+    // Get indexed files from all roots
+    const batch: { id: number; sourceRoot: string; relPath: string }[] = [];
+    for (const root of roots) {
+      const items = nextIndexedFiles(root, ANALYZE_BATCH - batch.length);
+      batch.push(...items);
+      if (batch.length >= ANALYZE_BATCH) break;
+    }
+    if (!batch.length) break;
+
+    // Process batch in parallel
+    await Promise.all(batch.map(async (item) => {
+      if (abortRequested) return;
+      const root = item.sourceRoot as 'fotos' | 'videos';
+      const base = rootBase(root);
+      const abs = path.join(base, item.relPath);
+      state.currentFile = `${root}/${item.relPath}`;
+      try {
+        const stat = await fs.promises.stat(abs);
+        if (stat.isFile()) {
+          await analyzeLibraryFile(root, base, {
+            absPath: abs,
+            relPath: item.relPath,
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            birthtimeMs: stat.birthtimeMs > 0 ? stat.birthtimeMs : null,
+          });
+        }
+      } catch (err) {
+        const msg = `${root}/${item.relPath}: ${err instanceof Error ? err.message : String(err)}`;
+        state.errors.push(msg);
+        logger.error('scan', msg);
+      }
+      state.scanned++;
+    }));
+
+    analyzed += batch.length;
+    if (analyzed % 20 === 0) persistTargetProgress(`${ANALYZE_MARKER}:${analyzed}`);
+    await scanPace();
+  }
+}
+
+async function runTargetScanInternal(resume: boolean): Promise<void> {
+  const roots = ['fotos', 'videos'] as const;
+  try {
+    // Phase 1: Walk (if not already done)
+    if (state.phase === 'walk') {
+      const walkOk = await runWalkPhase(roots, resume);
+      if (!walkOk || abortRequested) {
+        state.status = 'aborted';
+        finishTargetScan();
+        return;
+      }
+      state.phase = 'analyze';
+      let totalIndexed = 0;
+      for (const root of roots) totalIndexed += indexedCount(root);
+      if (totalIndexed === 0) {
+        state.status = 'completed';
+        finishTargetScan();
+        return;
+      }
+    }
+
+    // Phase 2: Analyze
+    await runAnalyzePhase(roots);
+
+    state.status = abortRequested ? 'aborted' : 'completed';
+  } catch (err) {
+    state.status = 'aborted';
+    const msg = err instanceof Error ? err.message : String(err);
+    state.errors.push(msg);
+    logger.error('scan', `Zielordner-Scan fehlgeschlagen: ${msg}`);
+  }
+  finishTargetScan();
 }
 
 /** Extract the YYYY_MM_DD folder date from a path like 2024/01 Januar/2024_01_01/file.jpg */

@@ -169,9 +169,9 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
   const fileType = detectFileType(ext);
 
   if (!fileType) {
-    const id = existing?.id ?? upsertFile({ ...baseFields(file, 'other', ext, originalName, nowMtime, isWhatsApp), status: 'problem' });
+    const id = existing?.id ?? upsertFile({ ...baseFields(file, 'other', ext, originalName, nowMtime, isWhatsApp), status: 'pending' });
     report(id, 'UNSUPPORTED_FORMAT', `Dateiformat ".${ext}" wird nicht unterstützt und kann nicht einsortiert werden.`);
-    return { fileId: id, reason: 'unsupported', status: 'problem', hash: null, md5: null, targetInfo: null, targetAbs: null, takenAt: null, dateSource: 'file', deviceId: null, deviceRaw: null, make: null, model: null, fileType: 'other' };
+    return { fileId: id, reason: 'unsupported', status: 'pending', hash: null, md5: null, targetInfo: null, targetAbs: null, takenAt: null, dateSource: 'file', deviceId: null, deviceRaw: null, make: null, model: null, fileType: 'other' };
   }
 
   /* ---- hash (dedup) ---- */
@@ -266,10 +266,9 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
     // are offered as path candidates on the device page – not as a problem.
     const pathCandidate = !hasExifInfo && deviceResolution.pathInfo.person != null;
     if (!hasExifInfo && !pathCandidate) {
-      updateFile(fileId, { status: 'problem' });
       const raw = deviceResolution.raw ?? 'unbekannt';
       report(fileId, 'UNKNOWN_DEVICE', `Kein Gerät für "${raw}" zugeordnet. Ohne Geräte-Zuordnung wird die Datei nicht übertragen.`);
-      return { fileId, reason: 'device', status: 'problem', hash, md5, targetInfo: null, targetAbs: null, takenAt: null, dateSource: 'file', deviceId: null, deviceRaw: null, make, model, fileType };
+      return { fileId, reason: 'device', status: 'pending', hash, md5, targetInfo: null, targetAbs: null, takenAt: null, dateSource: 'file', deviceId: null, deviceRaw: null, make, model, fileType };
     }
     // EXIF-Geräteinfo oder Pfad-Kandidat: Keine Problem-Meldung – die Datei bleibt
     // blockiert (pending) und wird auf der Geräteseite als unbekanntes Gerät zum Übernehmen angeboten.
@@ -321,9 +320,8 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
   if (filenameDate && !override) {
     const filenameDateIso = toLocalIso(filenameDate);
     if (differsByDay(takenAt, filenameDateIso)) {
-      updateFile(fileId, { status: 'problem', takenAt, dateSource });
       report(fileId, 'DATE_MISMATCH_FILENAME', `Datum im Dateinamen (${localDateKey(filenameDateIso)}) weicht vom ermittelten Datum (${localDateKey(takenAt)}) ab.`);
-      return { fileId, reason: 'filename-date', status: 'problem', hash, md5, targetInfo: null, targetAbs: null, takenAt, dateSource, deviceId: null, deviceRaw: null, make, model, fileType };
+      return { fileId, reason: 'filename-date', status: 'pending', hash, md5, targetInfo: null, targetAbs: null, takenAt, dateSource, deviceId: null, deviceRaw: null, make, model, fileType };
     }
   }
 
@@ -358,14 +356,12 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
     }
     if (!targetInfo) {
       // Alle Namenskandidaten sind bereits vergeben.
-      updateFile(fileId, { status: 'problem' });
       report(fileId, 'TARGET_EXISTS', `Zieldatei existiert bereits: ${last?.relPath}`);
-      return { fileId, reason: 'target-exists', status: 'problem', hash, md5, targetInfo: last, targetAbs: null, takenAt, dateSource, deviceId: null, deviceRaw: null, make, model, fileType };
+      return { fileId, reason: 'target-exists', status: 'pending', hash, md5, targetInfo: last, targetAbs: null, takenAt, dateSource, deviceId: null, deviceRaw: null, make, model, fileType };
     }
   } catch (err) {
-    updateFile(fileId, { status: 'problem' });
     report(fileId, 'READ_ERROR', `Zielname konnte nicht erstellt werden: ${err instanceof Error ? err.message : String(err)}`);
-    return { fileId, reason: 'target-exists', status: 'problem', hash, md5, targetInfo: null, targetAbs: null, takenAt, dateSource, deviceId: null, deviceRaw: null, make, model, fileType };
+    return { fileId, reason: 'target-exists', status: 'pending', hash, md5, targetInfo: null, targetAbs: null, takenAt, dateSource, deviceId: null, deviceRaw: null, make, model, fileType };
   }
 
   /* ---- ready ---- */

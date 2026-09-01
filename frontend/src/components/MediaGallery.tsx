@@ -78,10 +78,10 @@ function formatSize(bytes: number | null): string {
 }
 
 function statusChip(status: FileRecord['status']) {
-  const map: Record<string, { color: 'info' | 'success' | 'error'; label: string }> = {
-    pending: { color: 'info', label: 'offen' },
+  const map: Record<string, { color: 'info' | 'success' | 'warning'; label: string }> = {
+    indexed: { color: 'info', label: 'indexiert' },
+    pending: { color: 'warning', label: 'offen' },
     transferred: { color: 'success', label: 'übertragen' },
-    problem: { color: 'error', label: 'Problem' },
   };
   const m = map[status] ?? { color: 'info', label: status };
   return <Chip size="small" color={m.color} label={m.label} variant="outlined" />;

@@ -41,6 +41,7 @@ export function getDb(): DatabaseSync {
   migrateRunKinds(db);
   migrateFilesMd5(db);
   migrateScanProgressCounters(db);
+  migrateFilesStatusIndexed(db);
   seedSettings(db);
   return db;
 }
@@ -120,6 +121,57 @@ function migrateScanProgressCounters(d: DatabaseSync): void {
   if (!cols.some((c) => c.name === 'run_id')) {
     d.exec('ALTER TABLE scan_progress ADD COLUMN run_id INTEGER');
   }
+}
+
+/** Convert 'problem' status to 'pending' and rebuild files table with 'indexed' status. */
+function migrateFilesStatusIndexed(d: DatabaseSync): void {
+  const row = d.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'files'").get() as { sql: string } | undefined;
+  if (!row) return;
+  // Already has 'indexed' in the CHECK constraint?
+  if (/'indexed'/.test(row.sql)) return;
+  // Convert existing 'problem' files to 'pending'
+  d.exec("UPDATE files SET status = 'pending' WHERE status = 'problem'");
+  // Rebuild table with new CHECK constraint
+  d.exec('PRAGMA foreign_keys = OFF;');
+  d.exec('BEGIN;');
+  d.exec(`CREATE TABLE files_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hash TEXT,
+    md5 TEXT,
+    source_root TEXT NOT NULL DEFAULT 'upload',
+    source_rel_path TEXT NOT NULL,
+    source_size INTEGER,
+    source_mtime INTEGER,
+    file_type TEXT NOT NULL CHECK (file_type IN ('image','video','other')),
+    ext TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    target_root TEXT,
+    target_rel_path TEXT,
+    device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+    device_raw TEXT,
+    make TEXT,
+    model TEXT,
+    taken_at TEXT,
+    date_source TEXT CHECK (date_source IN ('exif','quicktime','file','filename','override')),
+    override_date TEXT,
+    override_source TEXT CHECK (override_source IN ('file','meta','filename')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('indexed','pending','transferred')),
+    transferred_at TEXT,
+    is_whatsapp INTEGER NOT NULL DEFAULT 0,
+    meta_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (source_root, source_rel_path)
+  );`);
+  d.exec('INSERT INTO files_new SELECT * FROM files;');
+  d.exec('DROP TABLE files;');
+  d.exec('ALTER TABLE files_new RENAME TO files;');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_files_hash ON files(hash);');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_files_source ON files(source_root, source_rel_path);');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_files_md5 ON files(md5);');
+  d.exec('COMMIT;');
+  d.exec('PRAGMA foreign_keys = ON;');
 }
 
 /** Extend transfer_runs into a general run history (kind, indexed, new_files). */

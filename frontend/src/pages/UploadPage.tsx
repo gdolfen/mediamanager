@@ -357,21 +357,13 @@ function GroupGrid({ groups, icon, emptyText, onPick }: {
           <Card>
             <CardActionArea onClick={() => onPick(g.key)}>
               <CardContent>
-                <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Stack direction="row" spacing={1} alignItems="center">
                   {icon}
                   <Typography variant="h6" sx={{ fontWeight: 700, minWidth: 0 }} noWrap>{g.label}</Typography>
                 </Stack>
-                <Typography variant="caption" color="text.secondary" display="block" noWrap title={g.path}>
-                  📁 {g.path}
+                <Typography variant="caption" color="text.secondary" display="block" noWrap title={g.path} sx={{ mt: 0.5 }}>
+                  {g.path}
                 </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {g.count.toLocaleString('de-DE')} Dateien · {g.images} Fotos · {g.videos} Videos
-                </Typography>
-                <Stack direction="row" spacing={0.5} sx={{ mt: 1 }} flexWrap="wrap" useFlexGap>
-                  {g.indexed > 0 && <Chip size="small" icon={<HourglassEmptyIcon />} label={`${g.indexed} indexiert`} color="info" variant="outlined" />}
-                  {g.pending > 0 && <Chip size="small" icon={<HourglassEmptyIcon />} label={`${g.pending} offen`} color="warning" variant="outlined" />}
-                  {g.transferred > 0 && <Chip size="small" icon={<CheckCircleIcon />} label={`${g.transferred}✓`} color="success" variant="outlined" />}
-                </Stack>
               </CardContent>
             </CardActionArea>
           </Card>

@@ -46,6 +46,7 @@ const state: RecheckState = {
 };
 
 let abortRequested = false;
+let userAborted = false;
 
 export function getRecheckState(): RecheckState {
   return { ...state };
@@ -58,14 +59,17 @@ export function isRecheckRunning(): boolean {
 export function requestRecheckAbort(): boolean {
   if (!isRecheckRunning()) return false;
   abortRequested = true;
-  clearScanProgress('recheck');
+  userAborted = true;
   return true;
 }
+
+export function wasRecheckUserAborted(): boolean { return userAborted; }
 
 export function startRecheck(opts?: { resume?: boolean }): { ok: boolean; error?: string } {
   if (isRecheckRunning()) return { ok: false, error: 'Eine Neubewertung läuft bereits.' };
   if (!tryAcquire('recheck')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
   abortRequested = false;
+  userAborted = false;
   const run = startRun('recheck');
   const resume = Boolean(opts?.resume && getScanProgress('recheck')?.status === 'running');
   if (resume) {

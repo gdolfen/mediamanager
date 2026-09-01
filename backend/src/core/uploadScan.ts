@@ -62,6 +62,7 @@ const state: UploadScanState = {
 };
 
 let abortRequested = false;
+let userAborted = false;
 
 const WALK_MARKER = 'walk:upload';
 const ANALYZE_MARKER = 'analyze';
@@ -83,9 +84,12 @@ export function isUploadScanRunning(): boolean {
 export function requestUploadScanAbort(): boolean {
   if (!isUploadScanRunning()) return false;
   abortRequested = true;
-  clearScanProgress('upload');
+  userAborted = true;
   return true;
 }
+
+/** Ob der Scan manuell abgebrochen wurde (nicht fuer Resume aufheben). */
+export function wasUserAborted(): boolean { return userAborted; }
 
 export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; error?: string } {
   if (isUploadScanRunning()) return { ok: false, error: 'Ein Upload-Scan läuft bereits.' };
@@ -96,6 +100,7 @@ export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; err
     return { ok: false, error: validation.errors.join('; ') };
   }
   abortRequested = false;
+  userAborted = false;
   const resume = Boolean(opts?.resume && (getScanProgress('upload')?.status === 'running' || getScanProgress('upload')?.status === 'aborted'));
   if (resume) {
     const p = getScanProgress('upload')!;

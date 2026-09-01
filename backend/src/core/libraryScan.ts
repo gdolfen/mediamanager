@@ -72,6 +72,7 @@ const state: TargetScanState = {
 };
 
 let abortRequested = false;
+let userAborted = false;
 const LIBRARY_PROBLEM_TYPES: ProblemType[] = [
   'LIBRARY_META_FILENAME_MISMATCH',
   'LIBRARY_META_FILETIME_MISMATCH',
@@ -100,14 +101,18 @@ export function isTargetScanRunning(): boolean {
 export function requestTargetScanAbort(): boolean {
   if (!isTargetScanRunning()) return false;
   abortRequested = true;
-  clearScanProgress('target');
+  userAborted = true;
   return true;
 }
+
+/** Ob der Scan manuell abgebrochen wurde (nicht fuer Resume aufheben). */
+export function wasTargetUserAborted(): boolean { return userAborted; }
 
 export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; error?: string } {
   if (isTargetScanRunning()) return { ok: false, error: 'Ein Zielordner-Scan läuft bereits.' };
   if (!tryAcquire('targetScan')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
   abortRequested = false;
+  userAborted = false;
   const resume = Boolean(opts?.resume && (getScanProgress('target')?.status === 'running' || getScanProgress('target')?.status === 'aborted'));
   if (resume) {
     const p = getScanProgress('target')!;

@@ -1,7 +1,7 @@
 import { getScanProgress, clearScanProgress } from '../db/daos.js';
-import { startTargetScan } from './libraryScan.js';
-import { startUploadScan } from './uploadScan.js';
-import { startRecheck } from './recheck.js';
+import { startTargetScan, wasTargetUserAborted } from './libraryScan.js';
+import { startUploadScan, wasUserAborted } from './uploadScan.js';
+import { startRecheck, wasRecheckUserAborted } from './recheck.js';
 import { isUploadScanRunning } from './uploadScan.js';
 import { isTargetScanRunning } from './libraryScan.js';
 import { isRecheckRunning } from './recheck.js';
@@ -39,6 +39,10 @@ function tick(): void {
   for (const scanType of pending) {
     // Bereits fortgesetzte Scans nicht erneut starten.
     if (isRunningInMemory(scanType)) continue;
+    // Manuell abgebrochene Scans nicht neu starten (nur bei Server-Neustart).
+    if (scanType === 'upload' && wasUserAborted()) continue;
+    if (scanType === 'target' && wasTargetUserAborted()) continue;
+    if (scanType === 'recheck' && wasRecheckUserAborted()) continue;
     // Die Neubewertung ist exklusiv und wartet, bis die (parallelen) Scans fertig sind.
     if (scanType === 'recheck' && hasActiveScans()) continue;
     const result = startFor(scanType);

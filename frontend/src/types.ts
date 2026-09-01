@@ -26,9 +26,12 @@ export interface LibraryGroup {
 
 export interface TargetScanState {
   status: 'idle' | 'running' | 'completed' | 'aborted';
+  phase: 'walk' | 'analyze';
   totalDirs: number;
   totalFiles: number;
   scanned: number;
+  indexed: number;
+  analyzed: number;
   linked: number;
   newFiles: number;
   problems: number;
@@ -41,10 +44,12 @@ export interface TargetScanState {
 
 export interface UploadScanState {
   status: 'idle' | 'running' | 'completed' | 'aborted';
+  phase: 'walk' | 'analyze';
   totalDirs: number;
   totalFiles: number;
   scanned: number;
   indexed: number;
+  analyzed: number;
   skipped: number;
   problems: number;
   currentFile: string | null;

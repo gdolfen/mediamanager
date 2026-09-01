@@ -304,7 +304,9 @@ async function runUploadScanInternal(resume: boolean): Promise<void> {
         return;
       }
       state.phase = 'analyze';
-      if (indexedCount('upload') === 0) {
+      state.indexed = indexedCount('upload');
+      state.analyzed = 0;
+      if (state.indexed === 0) {
         state.status = 'completed';
         finishUploadScan(resultDirs, resultFiles);
         return;

@@ -39,6 +39,8 @@ export interface TargetScanState {
   totalDirs: number;
   totalFiles: number;
   scanned: number;
+  indexed: number;
+  analyzed: number;
   linked: number;
   newFiles: number;
   problems: number;
@@ -55,6 +57,8 @@ const state: TargetScanState = {
   totalDirs: 0,
   totalFiles: 0,
   scanned: 0,
+  indexed: 0,
+  analyzed: 0,
   linked: 0,
   newFiles: 0,
   problems: 0,
@@ -110,6 +114,8 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
     state.totalDirs = p.totalDirs;
     state.totalFiles = p.totalFiles;
     state.scanned = p.scanned;
+    state.indexed = 0;
+    state.analyzed = 0;
     state.linked = p.linked;
     state.newFiles = p.newFilesCount;
     state.problems = p.problems;
@@ -128,6 +134,8 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
     state.totalDirs = 0;
     state.totalFiles = 0;
     state.scanned = 0;
+    state.indexed = 0;
+    state.analyzed = 0;
     state.linked = 0;
     state.newFiles = 0;
     state.problems = 0;
@@ -448,6 +456,7 @@ async function runAnalyzePhase(roots: readonly ('fotos' | 'videos')[]): Promise<
     }));
 
     analyzed += batch.length;
+    state.analyzed = analyzed;
     if (analyzed % 20 === 0) persistTargetProgress(`${ANALYZE_MARKER}:${analyzed}`);
     await scanPace();
   }
@@ -467,6 +476,8 @@ async function runTargetScanInternal(resume: boolean): Promise<void> {
       state.phase = 'analyze';
       let totalIndexed = 0;
       for (const root of roots) totalIndexed += indexedCount(root);
+      state.indexed = totalIndexed;
+      state.analyzed = 0;
       if (totalIndexed === 0) {
         state.status = 'completed';
         finishTargetScan();

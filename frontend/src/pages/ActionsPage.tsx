@@ -69,8 +69,16 @@ export function ActionsPage() {
   const thumbPending = (thumbnails?.pending ?? 0) > 0;
   const anythingActive = transferRunning || uploadRunning || targetRunning || thumbPending;
 
-  const etaUpload = useEta(uploadScan?.scanned ?? 0, uploadScan?.totalFiles ?? 0, uploadRunning);
-  const etaTarget = useEta(targetScan?.scanned ?? 0, targetScan?.totalFiles ?? 0, targetRunning);
+  const etaUpload = useEta(
+    uploadScan?.phase === 'analyze' ? (uploadScan?.analyzed ?? 0) : (uploadScan?.scanned ?? 0),
+    uploadScan?.phase === 'analyze' ? (uploadScan?.indexed ?? 0) : (uploadScan?.totalFiles ?? 0),
+    uploadRunning
+  );
+  const etaTarget = useEta(
+    targetScan?.phase === 'analyze' ? (targetScan?.analyzed ?? 0) : (targetScan?.scanned ?? 0),
+    targetScan?.phase === 'analyze' ? (targetScan?.indexed ?? 0) : (targetScan?.totalFiles ?? 0),
+    targetRunning
+  );
 
   useEffect(() => {
     if (anythingActive && !pollRef.current) {
@@ -158,28 +166,54 @@ export function ActionsPage() {
               <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={async () => { await api.abortUploadScan(); }} disabled={!uploadRunning}>
                 Abbrechen
               </Button>
-              <Chip label={STATUS_LABEL[uploadScan?.status ?? 'idle']} color={uploadRunning ? 'warning' : uploadScan?.status === 'completed' ? 'success' : uploadScan?.status === 'aborted' ? 'error' : 'default'} />
+              {uploadRunning && (
+                <Chip
+                  label={uploadScan?.phase === 'analyze' ? 'Phase 2: Analysieren' : 'Phase 1: Durchsuchen'}
+                  color={uploadScan?.phase === 'analyze' ? 'secondary' : 'info'}
+                />
+              )}
+              {!uploadRunning && (
+                <Chip label={STATUS_LABEL[uploadScan?.status ?? 'idle']} color={uploadScan?.status === 'completed' ? 'success' : uploadScan?.status === 'aborted' ? 'error' : 'default'} />
+              )}
             </Stack>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Indiziert neue Dateien im Upload-Ordner (Hashes, Metadaten, Probleme) – kann parallel zum Zielordner-Scan laufen.
+              Dateien im Upload-Ordner durchsuchen und indexieren.
             </Typography>
-            {uploadRunning && <LinearProgress sx={{ mt: 2 }} />}
+            {uploadRunning && (
+              <LinearProgress
+                variant="determinate"
+                value={uploadScan?.phase === 'analyze'
+                  ? (uploadScan.indexed > 0 ? Math.round((uploadScan.analyzed / uploadScan.indexed) * 100) : 0)
+                  : (uploadScan?.totalFiles ?? 0) > 0 ? Math.round(((uploadScan?.scanned ?? 0) / (uploadScan?.totalFiles ?? 1)) * 100) : 0
+                }
+                sx={{ mt: 2 }}
+              />
+            )}
             <Box sx={{ mt: 2 }}>
-              <Grid container spacing={2}>
-                <Metric label="Gescannt" value={uploadScan?.scanned ?? 0} />
-                <Metric label="Indexiert" value={uploadScan?.indexed ?? 0} />
-                <Metric label="Übersprungen" value={uploadScan?.skipped ?? 0} />
-                <Metric label="Probleme" value={uploadScan?.problems ?? 0} />
-              </Grid>
+              {uploadScan?.phase === 'analyze' ? (
+                <Typography variant="body2" color="text.secondary">
+                  {uploadScan.analyzed.toLocaleString('de-DE')} von {uploadScan.indexed.toLocaleString('de-DE')} analysiert
+                </Typography>
+              ) : (
+                <Grid container spacing={2}>
+                  <Metric label="Gescannt" value={uploadScan?.scanned ?? 0} />
+                  <Metric label="Dateien" value={uploadScan?.totalFiles ?? 0} />
+                  <Metric label="Ordner" value={uploadScan?.totalDirs ?? 0} />
+                </Grid>
+              )}
             </Box>
-            {uploadScan && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                {uploadScan.scanned.toLocaleString('de-DE')} von {uploadScan.totalFiles.toLocaleString('de-DE')} Dateien · {uploadScan.totalDirs.toLocaleString('de-DE')} Ordner
-                {uploadRunning && uploadScan.scanned > 0 ? ` · Restzeit ${formatEta(etaUpload)}` : ''}
+            {uploadScan?.currentFile && uploadRunning && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>
+                {uploadScan.phase === 'analyze'
+                  ? uploadScan.currentFile
+                  : uploadScan.currentFile.includes('/') ? uploadScan.currentFile.substring(0, uploadScan.currentFile.lastIndexOf('/')) : uploadScan.currentFile
+                }
               </Typography>
             )}
-            {uploadScan?.currentFile && uploadRunning && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>Aktuell: {uploadScan.currentFile}</Typography>
+            {uploadRunning && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Restzeit {formatEta(etaUpload)}
+              </Typography>
             )}
             {uploadScan && uploadScan.errors.length > 0 && <ErrorList errors={uploadScan.errors} title="Fehler im letzten Scan:" />}
           </CardContent>
@@ -202,28 +236,54 @@ export function ActionsPage() {
               <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={async () => { await api.abortTargetScan(); }} disabled={!targetRunning}>
                 Abbrechen
               </Button>
-              <Chip label={STATUS_LABEL[targetScan?.status ?? 'idle']} color={targetRunning ? 'warning' : targetScan?.status === 'completed' ? 'success' : targetScan?.status === 'aborted' ? 'error' : 'default'} />
+              {targetRunning && (
+                <Chip
+                  label={targetScan?.phase === 'analyze' ? 'Phase 2: Analysieren' : 'Phase 1: Durchsuchen'}
+                  color={targetScan?.phase === 'analyze' ? 'secondary' : 'info'}
+                />
+              )}
+              {!targetRunning && (
+                <Chip label={STATUS_LABEL[targetScan?.status ?? 'idle']} color={targetScan?.status === 'completed' ? 'success' : targetScan?.status === 'aborted' ? 'error' : 'default'} />
+              )}
             </Stack>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Durchsucht die Zielordner (Fotos/Videos) und aktualisiert die Bibliothek – kann parallel zum Upload-Scan laufen.
+              Durchsucht die Zielordner (Fotos/Videos) und aktualisiert die Bibliothek.
             </Typography>
-            {targetRunning && <LinearProgress sx={{ mt: 2 }} />}
+            {targetRunning && (
+              <LinearProgress
+                variant="determinate"
+                value={targetScan?.phase === 'analyze'
+                  ? (targetScan.indexed > 0 ? Math.round((targetScan.analyzed / targetScan.indexed) * 100) : 0)
+                  : (targetScan?.totalFiles ?? 0) > 0 ? Math.round(((targetScan?.scanned ?? 0) / (targetScan?.totalFiles ?? 1)) * 100) : 0
+                }
+                sx={{ mt: 2 }}
+              />
+            )}
             <Box sx={{ mt: 2 }}>
-              <Grid container spacing={2}>
-                <Metric label="Gescannt" value={targetScan?.scanned ?? 0} />
-                <Metric label="Verknüpft" value={targetScan?.linked ?? 0} />
-                <Metric label="Neu" value={targetScan?.newFiles ?? 0} />
-                <Metric label="Probleme" value={targetScan?.problems ?? 0} />
-              </Grid>
+              {targetScan?.phase === 'analyze' ? (
+                <Typography variant="body2" color="text.secondary">
+                  {targetScan.analyzed.toLocaleString('de-DE')} von {targetScan.indexed.toLocaleString('de-DE')} analysiert
+                </Typography>
+              ) : (
+                <Grid container spacing={2}>
+                  <Metric label="Gescannt" value={targetScan?.scanned ?? 0} />
+                  <Metric label="Dateien" value={targetScan?.totalFiles ?? 0} />
+                  <Metric label="Ordner" value={targetScan?.totalDirs ?? 0} />
+                </Grid>
+              )}
             </Box>
-            {targetScan && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                {targetScan.scanned.toLocaleString('de-DE')} von {targetScan.totalFiles.toLocaleString('de-DE')} Dateien · {targetScan.totalDirs.toLocaleString('de-DE')} Ordner
-                {targetRunning && targetScan.scanned > 0 ? ` · Restzeit ${formatEta(etaTarget)}` : ''}
+            {targetScan?.currentFile && targetRunning && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>
+                {targetScan.phase === 'analyze'
+                  ? targetScan.currentFile
+                  : targetScan.currentFile.includes('/') ? targetScan.currentFile.substring(0, targetScan.currentFile.lastIndexOf('/')) : targetScan.currentFile
+                }
               </Typography>
             )}
-            {targetScan?.currentFile && targetRunning && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>Aktuell: {targetScan.currentFile}</Typography>
+            {targetRunning && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Restzeit {formatEta(etaTarget)}
+              </Typography>
             )}
             {targetScan && targetScan.errors.length > 0 && <ErrorList errors={targetScan.errors} title="Fehler im letzten Scan:" />}
           </CardContent>

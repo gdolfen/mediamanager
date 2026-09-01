@@ -31,6 +31,8 @@ export interface WalkOptions {
   skipDirsBefore?: string;
   /** Wird beim Betreten jedes Unterverzeichnisses (relativer Pfad) aufgerufen. */
   onDir?: (relDir: string) => void | Promise<void>;
+  /** Max parallel traversed sibling directories (default 1 = sequential). */
+  concurrency?: number;
 }
 
 /**
@@ -44,11 +46,33 @@ export interface WalkOptions {
  */
 export async function walkTree(base: string, onFile: (f: ScannedFile, stats: WalkStats) => void | Promise<void>, shouldAbort?: () => boolean, opts?: WalkOptions): Promise<WalkStats> {
   const stats: WalkStats = { dirs: 0, files: 0 };
+  const maxConcurrency = opts?.concurrency ?? 1;
+
+  /** Simple concurrency pool for parallel directory traversal. */
+  async function runPool<T>(items: T[], fn: (item: T) => Promise<void>): Promise<void> {
+    if (maxConcurrency <= 1) {
+      for (const item of items) {
+        if (shouldAbort?.()) break;
+        await fn(item);
+      }
+      return;
+    }
+    let idx = 0;
+    const workers = Math.min(maxConcurrency, items.length);
+    async function worker() {
+      while (idx < items.length) {
+        if (shouldAbort?.()) break;
+        const i = idx++;
+        await fn(items[i]);
+      }
+    }
+    await Promise.all(Array.from({ length: workers }, () => worker()));
+  }
 
   async function walk(dir: string, rel: string): Promise<void> {
     if (shouldAbort?.()) return;
     const skip = opts?.skipDirsBefore;
-    if (rel && skip && rel < skip && !skip.startsWith(rel + '/')) return; // Teilbaum war schon vollständig abgelaufen
+    if (rel && skip && rel < skip && !skip.startsWith(rel + '/')) return;
     if (rel !== '' && opts?.onDir) await opts.onDir(rel);
     let entries;
     try {
@@ -57,30 +81,41 @@ export async function walkTree(base: string, onFile: (f: ScannedFile, stats: Wal
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    // Separate files and directories
+    const dirs: typeof entries = [];
     for (const entry of entries) {
       if (shouldAbort?.()) return;
-      const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (SKIP_DIR_NAMES.has(entry.name) || entry.name.startsWith('.')) continue;
         stats.dirs++;
-        await walk(abs, rel ? `${rel}/${entry.name}` : entry.name);
+        dirs.push(entry);
       } else if (entry.isFile()) {
         let stat;
         try {
-          stat = await fs.promises.stat(abs);
+          stat = await fs.promises.stat(path.join(dir, entry.name));
         } catch {
           continue;
         }
         stats.files++;
         const f: ScannedFile = {
-          absPath: abs,
-          relPath: path.relative(base, abs).replace(/\\/g, '/'),
+          absPath: path.join(dir, entry.name),
+          relPath: path.relative(base, path.join(dir, entry.name)).replace(/\\/g, '/'),
           size: stat.size,
           mtimeMs: stat.mtimeMs,
           birthtimeMs: stat.birthtimeMs > 0 ? stat.birthtimeMs : null,
         };
         await onFile(f, stats);
       }
+    }
+
+    // Traverse sibling directories in parallel (within concurrency limit)
+    if (dirs.length > 0) {
+      await runPool(dirs, async (entry) => {
+        const abs = path.join(dir, entry.name);
+        const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+        await walk(abs, childRel);
+      });
     }
   }
 

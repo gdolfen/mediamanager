@@ -16,6 +16,8 @@ import {
   resetScanQueue,
   nextIndexedFiles,
   indexedCount,
+  createBatchUpsert,
+  flushFormats,
   startRun,
   updateRun,
 } from '../db/daos.js';
@@ -204,6 +206,7 @@ async function runWalkPhase(roots: readonly ('fotos' | 'videos')[], resume: bool
     }
   }
 
+  const batch = createBatchUpsert();
   for (let i = startIdx; i < roots.length; i++) {
     const root = roots[i];
     const base = rootBase(root);
@@ -222,7 +225,7 @@ async function runWalkPhase(roots: readonly ('fotos' | 'videos')[], resume: bool
 
       if (fileType && isSupportedExt(ext)) {
         // Index library file with status='indexed'
-        upsertFile({
+        batch.add({
           sourceRoot: root,
           hash: null,
           md5: null,
@@ -254,6 +257,7 @@ async function runWalkPhase(roots: readonly ('fotos' | 'videos')[], resume: bool
       }
     }, () => abortRequested, {
       skipDirsBefore: skipDirs.get(root),
+      concurrency: 4,
       onDir: (relDir) => persistTargetProgress(`${WALK_MARKER}:${root}@${relDir}`),
     });
     cumDirs += result.dirs;
@@ -264,6 +268,8 @@ async function runWalkPhase(roots: readonly ('fotos' | 'videos')[], resume: bool
     logger.info('scan', `Zielordner-Scan: ${result.dirs} Ordner, ${result.files} Dateien in "${root}" gefunden.`);
     if (abortRequested) break;
   }
+  batch.flush();
+  flushFormats();
   persistTargetProgress(`${ANALYZE_MARKER}:0`);
   return !abortRequested;
 }

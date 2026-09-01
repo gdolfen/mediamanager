@@ -128,6 +128,7 @@ export interface FileRecord {
   sourceRoot: string;
   sourceRelPath: string;
   sourceSize: number | null;
+  sourceMtime: number | null;
   fileType: FileType;
   ext: string;
   originalName: string;
@@ -143,6 +144,8 @@ export interface FileRecord {
   overrideSource: string | null;
   status: FileStatus;
   transferredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
   isWhatsApp: boolean;
   meta?: Record<string, unknown> | null;
   deviceMappedName?: string | null;

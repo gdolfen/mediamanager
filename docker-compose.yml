@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        VERSION: "1.0.5"
+        VERSION: "1.0.7"
     container_name: mediamanager
     restart: unless-stopped
     ports:

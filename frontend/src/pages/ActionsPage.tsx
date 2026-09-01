@@ -181,10 +181,12 @@ export function ActionsPage() {
             </Typography>
             {uploadRunning && (
               <LinearProgress
-                variant="determinate"
-                value={uploadScan?.phase === 'analyze'
-                  ? (uploadScan.indexed > 0 ? Math.round((uploadScan.analyzed / uploadScan.indexed) * 100) : 0)
-                  : (uploadScan?.totalFiles ?? 0) > 0 ? Math.round(((uploadScan?.scanned ?? 0) / (uploadScan?.totalFiles ?? 1)) * 100) : 0
+                variant={etaUpload != null ? 'determinate' : 'indeterminate'}
+                value={etaUpload != null
+                  ? (uploadScan?.phase === 'analyze'
+                    ? (uploadScan.indexed > 0 ? Math.round((uploadScan.analyzed / uploadScan.indexed) * 100) : 0)
+                    : (uploadScan?.totalFiles ?? 0) > 0 ? Math.round(((uploadScan?.scanned ?? 0) / (uploadScan?.totalFiles ?? 1)) * 100) : 0)
+                  : undefined
                 }
                 sx={{ mt: 2 }}
               />
@@ -251,10 +253,12 @@ export function ActionsPage() {
             </Typography>
             {targetRunning && (
               <LinearProgress
-                variant="determinate"
-                value={targetScan?.phase === 'analyze'
-                  ? (targetScan.indexed > 0 ? Math.round((targetScan.analyzed / targetScan.indexed) * 100) : 0)
-                  : (targetScan?.totalFiles ?? 0) > 0 ? Math.round(((targetScan?.scanned ?? 0) / (targetScan?.totalFiles ?? 1)) * 100) : 0
+                variant={etaTarget != null ? 'determinate' : 'indeterminate'}
+                value={etaTarget != null
+                  ? (targetScan?.phase === 'analyze'
+                    ? (targetScan.indexed > 0 ? Math.round((targetScan.analyzed / targetScan.indexed) * 100) : 0)
+                    : (targetScan?.totalFiles ?? 0) > 0 ? Math.round(((targetScan?.scanned ?? 0) / (targetScan?.totalFiles ?? 1)) * 100) : 0)
+                  : undefined
                 }
                 sx={{ mt: 2 }}
               />

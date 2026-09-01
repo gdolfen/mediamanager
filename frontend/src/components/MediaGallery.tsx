@@ -28,6 +28,9 @@ import ViewListIcon from '@mui/icons-material/ViewList';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ScheduleIcon from '@mui/icons-material/Schedule';
+import SearchIcon from '@mui/icons-material/Search';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { Thumbnail } from './Thumbnail';
@@ -113,6 +116,11 @@ function MediaTile({ file, size, onClick, onOpenDevice, onMouseEnter, onMouseLea
       <Box sx={{ position: 'relative' }}>
         <Thumbnail fileId={file.id} fileType={file.fileType} size={size} noDialog />
         <Box sx={{ position: 'absolute', top: 4, right: 4 }}>{problemBadge(file)}</Box>
+        <Box sx={{ position: 'absolute', bottom: 4, left: 4 }}>
+          {file.status === 'transferred' && <CheckCircleIcon fontSize="small" sx={{ color: 'success.main', opacity: 0.8 }} />}
+          {file.status === 'indexed' && <SearchIcon fontSize="small" sx={{ color: 'info.main', opacity: 0.8 }} />}
+          {file.status === 'pending' && <ScheduleIcon fontSize="small" sx={{ color: 'warning.main', opacity: 0.8 }} />}
+        </Box>
       </Box>
       <Box sx={{ px: 0.5, pb: 0.5 }}>
         <Stack direction="row" spacing={0.5} alignItems="center">
@@ -329,46 +337,63 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
 }
 
 export function FileInfoCard({ file }: { file: FileRecord }) {
-  const rows: { key: string; value: string }[] = [];
-  if (file.takenAt) rows.push({ key: 'Aufnahmedatum', value: new Date(file.takenAt).toLocaleString('de-DE') });
-  rows.push({ key: 'Datei', value: file.originalName });
-  if (file.deviceRaw) rows.push({ key: 'Geräte-Indikator', value: file.deviceRaw });
-  if (deviceName(file)) rows.push({ key: 'Gerät', value: deviceName(file) });
-  if (file.make || file.model) rows.push({ key: 'Make/Model', value: `${file.make ?? ''} ${file.model ?? ''}`.trim() });
-  if (file.fileType) rows.push({ key: 'Typ', value: file.fileType === 'video' ? 'Video' : 'Bild' });
-  rows.push({ key: 'Status', value: file.status });
-  rows.push({ key: 'Quelle', value: `${file.sourceRoot}: ${file.sourceRelPath}` });
-  if (file.targetRoot && file.targetRelPath) rows.push({ key: 'Ziel', value: `${file.targetRoot}: ${file.targetRelPath}` });
-  if (file.sourceSize != null) rows.push({ key: 'Größe', value: `${(file.sourceSize / 1024 / 1024).toFixed(1)} MB` });
+  const fmtSize = (bytes: number | null) => bytes == null ? '–' : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  const fmtDate = (iso: string | null) => iso ? new Date(iso).toLocaleString('de-DE') : '–';
+
+  const fileRows: { key: string; value: string }[] = [];
+  fileRows.push({ key: 'Datei', value: file.originalName });
+  if (file.fileType) fileRows.push({ key: 'Typ', value: file.fileType === 'video' ? 'Video' : 'Bild' });
+  fileRows.push({ key: 'Status', value: file.status });
+  if (file.sourceSize != null) fileRows.push({ key: 'Größe', value: fmtSize(file.sourceSize) });
+  if (file.takenAt) fileRows.push({ key: 'Aufnahmedatum', value: fmtDate(file.takenAt) });
+  if (file.sourceMtime != null) fileRows.push({ key: 'Letzte Änderung', value: fmtDate(new Date(file.sourceMtime).toISOString()) });
+  fileRows.push({ key: 'Erstellt', value: fmtDate(file.createdAt) });
+  if (deviceName(file)) fileRows.push({ key: 'Gerät', value: deviceName(file) });
+  if (file.make || file.model) fileRows.push({ key: 'Make/Model', value: `${file.make ?? ''} ${file.model ?? ''}`.trim() });
+  fileRows.push({ key: 'Quelle', value: `${file.sourceRoot}: ${file.sourceRelPath}` });
+  if (file.targetRoot && file.targetRelPath) fileRows.push({ key: 'Ziel', value: `${file.targetRoot}: ${file.targetRelPath}` });
 
   const metaEntries = Object.entries(file.meta ?? {});
-  for (const [key, value] of metaEntries) {
-    if (value == null) continue;
-    const v = typeof value === 'object' ? JSON.stringify(value) : String(value);
-    rows.push({ key, value: v });
-  }
 
   return (
-    <Paper sx={{ p: 1.5, minWidth: 280, maxWidth: 420, maxHeight: 420, overflow: 'auto' }}>
-      <Stack spacing={0.25}>
-        {rows.map((r) => (
+    <Paper sx={{ p: 1.5, minWidth: 280, maxWidth: 420, maxHeight: 480, overflow: 'auto' }}>
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Datei-Informationen</Typography>
+      <Stack spacing={0.25} sx={{ mb: metaEntries.length > 0 ? 1.5 : 0 }}>
+        {fileRows.map((r) => (
           <Stack key={r.key} direction="row" spacing={1} sx={{ borderBottom: '1px solid', borderColor: 'divider', py: 0.25 }}>
-            <Box component="span" sx={{ minWidth: 140, flexShrink: 0, fontWeight: 600, color: 'text.secondary' }}>{r.key}</Box>
+            <Box component="span" sx={{ minWidth: 130, flexShrink: 0, fontWeight: 600, color: 'text.secondary', fontSize: 12 }}>{r.key}</Box>
             <Box component="span" sx={{ wordBreak: 'break-word', fontSize: 12 }}>{r.value}</Box>
           </Stack>
         ))}
-        {file.problems && file.problems.length > 0 && (
-          <>
-            <Typography variant="subtitle2" sx={{ mt: 1 }}>Probleme</Typography>
-            {file.problems.map((p) => (
-              <Stack key={p.id} direction="row" spacing={0.75} alignItems="flex-start">
-                <Box component="span" sx={{ minWidth: 150, flexShrink: 0 }}>{TYPE_META[p.type]?.label ?? p.type}</Box>
-                <Box component="span" sx={{ fontSize: 12 }}>{p.message}</Box>
-              </Stack>
-            ))}
-          </>
-        )}
       </Stack>
+      {metaEntries.length > 0 && (
+        <>
+          <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Meta-Informationen (EXIF)</Typography>
+          <Stack spacing={0.25}>
+            {metaEntries.map(([key, value]) => {
+              if (value == null) return null;
+              const v = typeof value === 'object' ? JSON.stringify(value) : String(value);
+              return (
+                <Stack key={key} direction="row" spacing={1} sx={{ borderBottom: '1px solid', borderColor: 'divider', py: 0.25 }}>
+                  <Box component="span" sx={{ minWidth: 130, flexShrink: 0, fontWeight: 600, color: 'text.secondary', fontSize: 12 }}>{key}</Box>
+                  <Box component="span" sx={{ wordBreak: 'break-word', fontSize: 12 }}>{v}</Box>
+                </Stack>
+              );
+            })}
+          </Stack>
+        </>
+      )}
+      {file.problems && file.problems.length > 0 && (
+        <>
+          <Typography variant="subtitle2" sx={{ mt: 1, mb: 0.5 }}>Probleme</Typography>
+          {file.problems.map((p) => (
+            <Stack key={p.id} direction="row" spacing={0.75} alignItems="flex-start">
+              <Box component="span" sx={{ minWidth: 130, flexShrink: 0, fontSize: 12 }}>{TYPE_META[p.type]?.label ?? p.type}</Box>
+              <Box component="span" sx={{ fontSize: 12 }}>{p.message}</Box>
+            </Stack>
+          ))}
+        </>
+      )}
     </Paper>
   );
 }

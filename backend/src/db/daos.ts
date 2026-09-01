@@ -13,6 +13,9 @@ import type {
 
 type Row = Record<string, unknown>;
 
+/** In-memory cache for format counts – flushed to DB in bulk. */
+const formatCache = new Map<string, { count: number; supported: boolean }>();
+
 function mapFile(r: Row): FileRecord {
   return {
     id: r.id as number,
@@ -131,7 +134,6 @@ export function upsertFile(f: {
   meta?: Record<string, unknown> | null;
 }): number {
   const sourceRoot = f.sourceRoot ?? 'upload';
-  const existing = getFileBySourcePath(sourceRoot, f.sourceRelPath);
   const metaJson = f.meta ? JSON.stringify(f.meta) : null;
   const stmt = getDb().prepare(`
     INSERT INTO files (
@@ -166,7 +168,73 @@ export function upsertFile(f: {
     f.targetRoot, f.targetRelPath, f.deviceId, f.deviceRaw, f.make, f.model, f.takenAt, f.dateSource,
     f.overrideDate, f.overrideSource, f.status, f.isWhatsApp ? 1 : 0, metaJson,
   );
-  return existing?.id ?? Number(result.lastInsertRowid);
+  return Number(result.lastInsertRowid);
+}
+
+export type UpsertFileParams = Parameters<typeof upsertFile>[0];
+
+const BATCH_SIZE = 100;
+
+export function createBatchUpsert() {
+  const buf: UpsertFileParams[] = [];
+  const stmt = getDb().prepare(`
+    INSERT INTO files (
+      hash, md5, source_root, source_rel_path, source_size, source_mtime, file_type, ext, original_name,
+      target_root, target_rel_path, device_id, device_raw, make, model, taken_at, date_source,
+      override_date, override_source, status, is_whatsapp, meta_json, transferred_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'))
+    ON CONFLICT(source_root, source_rel_path) DO UPDATE SET
+      hash = excluded.hash,
+      md5 = excluded.md5,
+      source_size = excluded.source_size,
+      source_mtime = excluded.source_mtime,
+      file_type = excluded.file_type,
+      ext = excluded.ext,
+      original_name = excluded.original_name,
+      target_root = excluded.target_root,
+      target_rel_path = excluded.target_rel_path,
+      device_id = excluded.device_id,
+      device_raw = excluded.device_raw,
+      make = excluded.make,
+      model = excluded.model,
+      taken_at = excluded.taken_at,
+      date_source = excluded.date_source,
+      is_whatsapp = excluded.is_whatsapp,
+      meta_json = excluded.meta_json,
+      status = excluded.status,
+      transferred_at = excluded.transferred_at,
+      updated_at = datetime('now')
+  `);
+
+  function flush(): void {
+    if (buf.length === 0) return;
+    const db = getDb();
+    db.exec('BEGIN');
+    try {
+      for (const f of buf) {
+        const sourceRoot = f.sourceRoot ?? 'upload';
+        const metaJson = f.meta ? JSON.stringify(f.meta) : null;
+        stmt.run(
+          f.hash, f.md5, sourceRoot, f.sourceRelPath, f.sourceSize, f.sourceMtime, f.fileType, f.ext, f.originalName,
+          f.targetRoot, f.targetRelPath, f.deviceId, f.deviceRaw, f.make, f.model, f.takenAt, f.dateSource,
+          f.overrideDate, f.overrideSource, f.status, f.isWhatsApp ? 1 : 0, metaJson,
+        );
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    buf.length = 0;
+  }
+
+  return {
+    add(f: UpsertFileParams): void {
+      buf.push(f);
+      if (buf.length >= BATCH_SIZE) flush();
+    },
+    flush,
+  };
 }
 
 export function updateFile(id: number, patch: Partial<FileRecord>): void {
@@ -952,14 +1020,38 @@ export function listLibraryFiles(opts: {
 /* ---------- formats ---------- */
 
 export function bumpFormat(ext: string, supported: boolean): void {
-  getDb().prepare(`
+  const key = ext.toLowerCase();
+  const existing = formatCache.get(key);
+  if (existing) {
+    existing.count++;
+    existing.supported = supported;
+  } else {
+    formatCache.set(key, { count: 1, supported });
+  }
+}
+
+export function flushFormats(): void {
+  if (formatCache.size === 0) return;
+  const db = getDb();
+  const stmt = db.prepare(`
     INSERT INTO formats (ext, count, supported, last_seen)
-    VALUES (?, 1, ?, datetime('now'))
+    VALUES (?, ?, ?, datetime('now'))
     ON CONFLICT(ext) DO UPDATE SET
-      count = count + 1,
+      count = count + excluded.count,
       supported = excluded.supported,
       last_seen = datetime('now')
-  `).run(ext.toLowerCase(), supported ? 1 : 0);
+  `);
+  db.exec('BEGIN');
+  try {
+    for (const [ext, data] of formatCache) {
+      stmt.run(ext, data.count, data.supported ? 1 : 0);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  formatCache.clear();
 }
 
 export function listFormats(): { ext: string; count: number; supported: boolean }[] {

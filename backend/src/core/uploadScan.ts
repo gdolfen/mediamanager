@@ -9,7 +9,8 @@ import {
   resetScanQueue,
   nextIndexedFiles,
   indexedCount,
-  upsertFile,
+  createBatchUpsert,
+  flushFormats,
   startRun,
   updateRun,
 } from '../db/daos.js';
@@ -179,6 +180,7 @@ async function runWalkPhase(uploadBase: string, resume: boolean): Promise<boolea
     }
   }
 
+  const batch = createBatchUpsert();
   const result = await scanUpload(uploadBase, async (f, stats) => {
     if (abortRequested) return;
     state.totalDirs = stats.dirs;
@@ -192,7 +194,7 @@ async function runWalkPhase(uploadBase: string, resume: boolean): Promise<boolea
     const isWhatsApp = isWhatsAppFilename(originalName);
 
     // Upsert with status='indexed' – no hash, no EXIF, no thumbnail yet
-    upsertFile({
+    batch.add({
       sourceRoot: 'upload',
       hash: null,
       md5: null,
@@ -224,9 +226,12 @@ async function runWalkPhase(uploadBase: string, resume: boolean): Promise<boolea
     }
   }, () => abortRequested, {
     skipDirsBefore,
+    concurrency: 4,
     onDir: (relDir) => persistUploadProgress(`${WALK_MARKER}@${relDir}`),
   });
 
+  batch.flush();
+  flushFormats();
   state.totalDirs = result.dirs;
   state.totalFiles = result.files;
   persistUploadProgress(`${ANALYZE_MARKER}:0`);

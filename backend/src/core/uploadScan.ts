@@ -108,6 +108,10 @@ export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; err
     state.scanned = p.scanned;
     state.indexed = p.indexed;
     state.analyzed = 0;
+    // Im Analyse-Phase die tatsaechliche Anzahl indexierter Datei aus der DB neu zaehlen
+    if (state.phase === 'analyze') {
+      state.indexed = indexedCount('upload');
+    }
     state.skipped = p.skipped;
     state.problems = p.problems;
     state.currentFile = null;

@@ -121,6 +121,10 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
     state.scanned = p.scanned;
     state.indexed = 0;
     state.analyzed = 0;
+    // Im Analyse-Phase die tatsaechliche Anzahl indexierter Datei aus der DB neu zaehlen
+    if (state.phase === 'analyze') {
+      for (const r of ['fotos', 'videos'] as const) state.indexed += indexedCount(r);
+    }
     state.linked = p.linked;
     state.newFiles = p.newFilesCount;
     state.problems = p.problems;

@@ -35,6 +35,7 @@ const STATUS_LABEL: Record<string, string> = {
   running: 'Läuft',
   completed: 'Abgeschlossen',
   aborted: 'Abgebrochen',
+  stopped: 'Gestoppt',
 };
 
 const KIND_LABEL: Record<RunKind, string> = {
@@ -363,7 +364,7 @@ export function ActionsPage() {
                   <TableRow key={r.id}>
                     <TableCell>{r.id}</TableCell>
                     <TableCell>{KIND_LABEL[r.kind] ?? r.kind}</TableCell>
-                    <TableCell><Chip size="small" label={STATUS_LABEL[r.status]} color={r.status === 'completed' ? 'success' : r.status === 'aborted' ? 'error' : 'warning'} /></TableCell>
+                    <TableCell><Chip size="small" label={STATUS_LABEL[r.status]} color={r.status === 'completed' ? 'success' : r.status === 'aborted' ? 'error' : 'default'} /></TableCell>
                     <TableCell>{formatDateTime(r.startedAt)}</TableCell>
                     <TableCell>{r.finishedAt ? formatDateTime(r.finishedAt) : '–'}</TableCell>
                     <TableCell align="right">{r.scanned.toLocaleString('de-DE')}</TableCell>

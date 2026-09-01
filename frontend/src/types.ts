@@ -25,7 +25,7 @@ export interface LibraryGroup {
 }
 
 export interface TargetScanState {
-  status: 'idle' | 'running' | 'completed' | 'aborted';
+  status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
   phase: 'walk' | 'analyze';
   totalDirs: number;
   totalFiles: number;
@@ -44,7 +44,7 @@ export interface TargetScanState {
 }
 
 export interface UploadScanState {
-  status: 'idle' | 'running' | 'completed' | 'aborted';
+  status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
   phase: 'walk' | 'analyze';
   totalDirs: number;
   totalFiles: number;
@@ -181,7 +181,7 @@ export interface Problem {
 }
 
 export interface RecheckState {
-  status: 'idle' | 'running' | 'completed' | 'aborted';
+  status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
   total: number;
   checked: number;
   created: number;
@@ -194,7 +194,7 @@ export interface RecheckState {
 
 export interface TransferState {
   runId: number | null;
-  status: 'idle' | 'running' | 'completed' | 'aborted';
+  status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
   totalDirs: number;
   totalFiles: number;
   scanned: number;
@@ -212,7 +212,7 @@ export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck';
 export interface RunRecord {
   id: number;
   kind: RunKind;
-  status: 'running' | 'completed' | 'aborted';
+  status: 'running' | 'completed' | 'aborted' | 'stopped';
   startedAt: string;
   finishedAt: string | null;
   scanned: number;

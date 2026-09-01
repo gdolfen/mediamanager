@@ -20,7 +20,7 @@ import { logger } from '../db/logger.js';
 import type { FileRecord, ProblemType } from '../types.js';
 
 export interface RecheckState {
-  status: 'idle' | 'running' | 'completed' | 'aborted';
+  status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
   runId: number | null;
   total: number;
   checked: number;
@@ -46,7 +46,6 @@ const state: RecheckState = {
 };
 
 let abortRequested = false;
-let userAborted = false;
 
 export function getRecheckState(): RecheckState {
   return { ...state };
@@ -59,17 +58,14 @@ export function isRecheckRunning(): boolean {
 export function requestRecheckAbort(): boolean {
   if (!isRecheckRunning()) return false;
   abortRequested = true;
-  userAborted = true;
+  state.status = 'stopped';
   return true;
 }
-
-export function wasRecheckUserAborted(): boolean { return userAborted; }
 
 export function startRecheck(opts?: { resume?: boolean }): { ok: boolean; error?: string } {
   if (isRecheckRunning()) return { ok: false, error: 'Eine Neubewertung läuft bereits.' };
   if (!tryAcquire('recheck')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
   abortRequested = false;
-  userAborted = false;
   const run = startRun('recheck');
   const resume = Boolean(opts?.resume && getScanProgress('recheck')?.status === 'running');
   if (resume) {
@@ -116,15 +112,19 @@ function persistRecheckProgress(fileId: number): void {
 function finishRecheck(): void {
   state.currentFile = null;
   state.finishedAt = new Date().toISOString();
-  const finished = state.status === 'completed' ? 'completed' : 'aborted';
+  const finished = state.status === 'completed' ? 'completed' : state.status === 'stopped' ? 'stopped' : 'aborted';
   if (state.runId != null) {
     updateRun(state.runId, { status: finished, scanned: state.checked, transferred: state.resolved, newFiles: state.created, problems: state.created });
     state.runId = null;
   }
-  clearScanProgress('recheck');
   if (state.status === 'completed') {
+    clearScanProgress('recheck');
     logger.info('scan', `Probleme-Neubewertung abgeschlossen: ${state.checked} Dateien geprüft, ${state.created} Probleme neu, ${state.resolved} gelöst.`);
+  } else if (state.status === 'stopped') {
+    saveScanProgress('recheck', { status: 'stopped', finishedAt: new Date().toISOString() });
+    logger.warn('scan', `Probleme-Neubewertung gestoppt: ${state.checked} Dateien geprüft.`);
   } else {
+    clearScanProgress('recheck');
     logger.warn('scan', `Probleme-Neubewertung abgebrochen: ${state.checked} Dateien geprüft.`);
   }
   release('recheck');
@@ -150,7 +150,8 @@ async function runRecheckInternal(resume: boolean): Promise<void> {
       if (state.checked % 25 === 0) persistRecheckProgress(file.id);
       await scanPace();
     }
-    state.status = abortRequested ? 'aborted' : 'completed';
+    if (abortRequested && state.status !== 'stopped') state.status = 'aborted';
+    else if (state.status !== 'stopped') state.status = 'completed';
   } catch (err) {
     state.status = 'aborted';
     const msg = err instanceof Error ? err.message : String(err);

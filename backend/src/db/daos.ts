@@ -400,7 +400,7 @@ export function enqueueAllMissingThumbnails(): void {
 
 export interface ScanProgressRow {
   scanType: string;
-  status: 'running' | 'completed' | 'aborted';
+  status: 'running' | 'completed' | 'aborted' | 'stopped';
   startedAt: string | null;
   finishedAt: string | null;
   totalDirs: number;

@@ -43,6 +43,7 @@ export function getDb(): DatabaseSync {
   migrateScanProgressCounters(db);
   migrateFilesStatusIndexed(db);
   migrateFilesSourceStatusIndex(db);
+  migrateStoppedStatus(db);
   seedSettings(db);
   return db;
 }
@@ -178,6 +179,50 @@ function migrateFilesStatusIndexed(d: DatabaseSync): void {
 /** Composite index for nextIndexedFiles queries during analyze phase. */
 function migrateFilesSourceStatusIndex(d: DatabaseSync): void {
   d.exec('CREATE INDEX IF NOT EXISTS idx_files_source_status_id ON files(source_root, status, id);');
+}
+
+/** Add 'stopped' status for manual UI stops (vs 'aborted' for crashes). */
+function migrateStoppedStatus(d: DatabaseSync): void {
+  // scan_progress: recreate with updated CHECK
+  d.exec(`CREATE TABLE IF NOT EXISTS scan_progress_new (
+    scan_type TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'idle' CHECK (status IN ('running','completed','aborted','stopped')),
+    started_at TEXT,
+    finished_at TEXT,
+    total_dirs INTEGER NOT NULL DEFAULT 0,
+    total_files INTEGER NOT NULL DEFAULT 0,
+    scanned INTEGER NOT NULL DEFAULT 0,
+    indexed INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    linked INTEGER NOT NULL DEFAULT 0,
+    new_files_count INTEGER NOT NULL DEFAULT 0,
+    problems INTEGER NOT NULL DEFAULT 0,
+    current TEXT,
+    run_id INTEGER,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );`);
+  d.exec('INSERT OR IGNORE INTO scan_progress_new SELECT * FROM scan_progress;');
+  d.exec('DROP TABLE IF EXISTS scan_progress;');
+  d.exec('ALTER TABLE scan_progress_new RENAME TO scan_progress;');
+
+  // transfer_runs: recreate with updated CHECK
+  d.exec(`CREATE TABLE IF NOT EXISTS transfer_runs_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL DEFAULT 'transfer',
+    status TEXT NOT NULL CHECK (status IN ('running','completed','aborted','stopped')),
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    scanned INTEGER NOT NULL DEFAULT 0,
+    transferred INTEGER NOT NULL DEFAULT 0,
+    indexed INTEGER NOT NULL DEFAULT 0,
+    new_files INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    problems INTEGER NOT NULL DEFAULT 0
+  );`);
+  d.exec('INSERT OR IGNORE INTO transfer_runs_new SELECT * FROM transfer_runs;');
+  d.exec('DROP TABLE IF EXISTS transfer_runs;');
+  d.exec('ALTER TABLE transfer_runs_new RENAME TO transfer_runs;');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_runs_kind ON transfer_runs(kind);');
 }
 
 /** Extend transfer_runs into a general run history (kind, indexed, new_files). */

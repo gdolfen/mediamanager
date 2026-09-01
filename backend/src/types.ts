@@ -83,7 +83,7 @@ export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck';
 export interface TransferRun {
   id: number;
   kind: RunKind;
-  status: 'running' | 'completed' | 'aborted';
+  status: 'running' | 'completed' | 'aborted' | 'stopped';
   startedAt: string;
   finishedAt: string | null;
   scanned: number;

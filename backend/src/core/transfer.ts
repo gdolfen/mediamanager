@@ -18,7 +18,7 @@ import { logger } from '../db/logger.js';
 
 export interface TransferState {
   runId: number | null;
-  status: 'idle' | 'running' | 'completed' | 'aborted';
+  status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
   totalDirs: number;
   totalFiles: number;
   scanned: number;
@@ -59,6 +59,7 @@ export function isRunning(): boolean {
 export function requestAbort(): boolean {
   if (!isRunning()) return false;
   abortRequested = true;
+  state.status = 'stopped';
   return true;
 }
 
@@ -163,7 +164,7 @@ async function runTransferInternal(runId: number): Promise<void> {
       await scanPace();
     }, () => abortRequested);
     state.currentFile = null;
-    const finished = abortRequested ? 'aborted' : 'completed';
+    const finished = state.status === 'completed' ? 'completed' : state.status === 'stopped' ? 'stopped' : 'aborted';
     state.status = finished;
     updateRun(runId, { status: finished });
     if (finished === 'completed') {

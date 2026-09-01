@@ -13,7 +13,6 @@ import {
   getScanProgress,
   clearScanProgress,
   resetScanQueue,
-  nextIndexedFiles,
   indexedCount,
   createBatchUpsert,
   flushFormats,
@@ -32,9 +31,10 @@ import { isSupportedExt, type FileRecord, type ProblemType } from '../types.js';
 import { tryAcquire, release } from './active.js';
 import { scanPace } from './pace.js';
 import { logger } from '../db/logger.js';
+import { runAnalyzePhase as runAnalyzePhaseShared } from './analyzePhase.js';
 
 export interface TargetScanState {
-  status: 'idle' | 'running' | 'completed' | 'aborted';
+  status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
   runId: number | null;
   phase: 'walk' | 'analyze';
   totalDirs: number;
@@ -72,7 +72,6 @@ const state: TargetScanState = {
 };
 
 let abortRequested = false;
-let userAborted = false;
 const LIBRARY_PROBLEM_TYPES: ProblemType[] = [
   'LIBRARY_META_FILENAME_MISMATCH',
   'LIBRARY_META_FILETIME_MISMATCH',
@@ -101,18 +100,14 @@ export function isTargetScanRunning(): boolean {
 export function requestTargetScanAbort(): boolean {
   if (!isTargetScanRunning()) return false;
   abortRequested = true;
-  userAborted = true;
+  state.status = 'stopped';
   return true;
 }
-
-/** Ob der Scan manuell abgebrochen wurde (nicht fuer Resume aufheben). */
-export function wasTargetUserAborted(): boolean { return userAborted; }
 
 export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; error?: string } {
   if (isTargetScanRunning()) return { ok: false, error: 'Ein Zielordner-Scan läuft bereits.' };
   if (!tryAcquire('targetScan')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
   abortRequested = false;
-  userAborted = false;
   const resume = Boolean(opts?.resume && (getScanProgress('target')?.status === 'running' || getScanProgress('target')?.status === 'aborted'));
   if (resume) {
     const p = getScanProgress('target')!;
@@ -184,7 +179,7 @@ function finishTargetScan(): void {
   state.currentFile = null;
   state.currentDirs = [];
   state.finishedAt = new Date().toISOString();
-  const finished = state.status === 'completed' ? 'completed' : 'aborted';
+  const finished = state.status === 'completed' ? 'completed' : state.status === 'stopped' ? 'stopped' : 'aborted';
   if (state.runId != null) {
     updateRun(state.runId, { status: finished, scanned: state.scanned, transferred: state.linked, newFiles: state.newFiles, problems: state.problems });
     state.runId = null;
@@ -193,8 +188,8 @@ function finishTargetScan(): void {
     clearScanProgress('target');
     logger.info('scan', `Zielordner-Scan abgeschlossen: ${state.scanned} gescannt, ${state.linked} verknüpft, ${state.newFiles} neu, ${state.problems} Probleme.`);
   } else {
-    saveScanProgress('target', { status: 'aborted', finishedAt: new Date().toISOString(), linked: state.linked, newFilesCount: state.newFiles, problems: state.problems });
-    logger.warn('scan', `Zielordner-Scan abgebrochen: ${state.scanned} gescannt, ${state.linked} verknüpft. Fortsetzen möglich.`);
+    saveScanProgress('target', { status: finished, finishedAt: new Date().toISOString(), linked: state.linked, newFilesCount: state.newFiles, problems: state.problems });
+    logger.warn('scan', `Zielordner-Scan beendet (${finished}): ${state.scanned} gescannt, ${state.linked} verknüpft.`);
   }
   release('targetScan');
 }
@@ -439,51 +434,27 @@ export async function analyzeLibraryFile(
 
 /** Phase 2: Analyze indexed files (hash, EXIF, device, consistency, linking). */
 async function runAnalyzePhase(roots: readonly ('fotos' | 'videos')[]): Promise<void> {
-  const ANALYZE_BATCH = 20;
-  let analyzed = 0;
   cacheDevices();
 
-  while (!abortRequested) {
-    // Get indexed files from all roots
-    const batch: { id: number; sourceRoot: string; relPath: string }[] = [];
-    for (const root of roots) {
-      const items = nextIndexedFiles(root, ANALYZE_BATCH - batch.length);
-      batch.push(...items);
-      if (batch.length >= ANALYZE_BATCH) break;
-    }
-    if (!batch.length) break;
-
-    // Process batch in parallel
-    await Promise.all(batch.map(async (item) => {
-      if (abortRequested) return;
+  await runAnalyzePhaseShared([...roots], {
+    shouldAbort: () => abortRequested,
+    onFile: async (item, file) => {
       const root = item.sourceRoot as 'fotos' | 'videos';
       const base = rootBase(root);
-      const abs = path.join(base, item.relPath);
       state.currentFile = `${root}/${item.relPath}`;
-      try {
-        const stat = await fs.promises.stat(abs);
-        if (stat.isFile()) {
-          await analyzeLibraryFile(root, base, {
-            absPath: abs,
-            relPath: item.relPath,
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
-            birthtimeMs: stat.birthtimeMs > 0 ? stat.birthtimeMs : null,
-          });
-        }
-      } catch (err) {
-        const msg = `${root}/${item.relPath}: ${err instanceof Error ? err.message : String(err)}`;
-        state.errors.push(msg);
-        logger.error('scan', msg);
-      }
-      state.scanned++;
-      await scanPace();
-    }));
+      await analyzeLibraryFile(root, base, file);
+    },
+    onProgress: (analyzed) => {
+      state.analyzed = analyzed;
+      if (analyzed % 20 === 0) persistTargetProgress(`${ANALYZE_MARKER}:${analyzed}`);
+    },
+    onError: (msg) => {
+      state.errors.push(msg);
+      logger.error('scan', msg);
+    },
+    onScanned: () => { state.scanned++; },
+  });
 
-    analyzed += batch.length;
-    state.analyzed = analyzed;
-    if (analyzed % 20 === 0) persistTargetProgress(`${ANALYZE_MARKER}:${analyzed}`);
-  }
   clearDeviceCache();
 }
 
@@ -494,7 +465,7 @@ async function runTargetScanInternal(resume: boolean): Promise<void> {
     if (state.phase === 'walk') {
       const walkOk = await runWalkPhase(roots, resume);
       if (!walkOk || abortRequested) {
-        state.status = 'aborted';
+        if (state.status !== 'stopped') state.status = 'aborted';
         finishTargetScan();
         return;
       }
@@ -513,7 +484,8 @@ async function runTargetScanInternal(resume: boolean): Promise<void> {
     // Phase 2: Analyze
     await runAnalyzePhase(roots);
 
-    state.status = abortRequested ? 'aborted' : 'completed';
+    if (abortRequested && state.status !== 'stopped') state.status = 'aborted';
+    else if (state.status !== 'stopped') state.status = 'completed';
   } catch (err) {
     state.status = 'aborted';
     const msg = err instanceof Error ? err.message : String(err);

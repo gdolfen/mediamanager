@@ -204,12 +204,19 @@ export function ActionsPage() {
                 </Grid>
               )}
             </Box>
-            {uploadScan?.currentFile && uploadRunning && (
+            {uploadScan?.currentDirs && uploadScan.currentDirs.length > 0 && uploadRunning && uploadScan.phase === 'walk' && (
+              <Box sx={{ mt: 1 }}>
+                <Typography variant="caption" color="text.secondary">Aktive Verzeichnisse:</Typography>
+                <Box component="ul" sx={{ m: 0, pl: 2, listStyle: 'none' }}>
+                  {uploadScan.currentDirs.filter(Boolean).map((d, i) => (
+                    <li key={i}><Typography variant="caption" color="text.secondary" noWrap display="block" title={d}>{d}</Typography></li>
+                  ))}
+                </Box>
+              </Box>
+            )}
+            {uploadScan?.currentFile && uploadRunning && uploadScan.phase === 'analyze' && (
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>
-                {uploadScan.phase === 'analyze'
-                  ? uploadScan.currentFile
-                  : uploadScan.currentFile.includes('/') ? uploadScan.currentFile.substring(0, uploadScan.currentFile.lastIndexOf('/')) : uploadScan.currentFile
-                }
+                {uploadScan.currentFile}
               </Typography>
             )}
             {uploadRunning && (
@@ -276,12 +283,19 @@ export function ActionsPage() {
                 </Grid>
               )}
             </Box>
-            {targetScan?.currentFile && targetRunning && (
+            {targetScan?.currentDirs && targetScan.currentDirs.length > 0 && targetRunning && targetScan.phase === 'walk' && (
+              <Box sx={{ mt: 1 }}>
+                <Typography variant="caption" color="text.secondary">Aktive Verzeichnisse:</Typography>
+                <Box component="ul" sx={{ m: 0, pl: 2, listStyle: 'none' }}>
+                  {targetScan.currentDirs.filter(Boolean).map((d, i) => (
+                    <li key={i}><Typography variant="caption" color="text.secondary" noWrap display="block" title={d}>{d}</Typography></li>
+                  ))}
+                </Box>
+              </Box>
+            )}
+            {targetScan?.currentFile && targetRunning && targetScan.phase === 'analyze' && (
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>
-                {targetScan.phase === 'analyze'
-                  ? targetScan.currentFile
-                  : targetScan.currentFile.includes('/') ? targetScan.currentFile.substring(0, targetScan.currentFile.lastIndexOf('/')) : targetScan.currentFile
-                }
+                {targetScan.currentFile}
               </Typography>
             )}
             {targetRunning && (

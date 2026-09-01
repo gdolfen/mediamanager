@@ -36,6 +36,7 @@ export interface UploadScanState {
   skipped: number;
   problems: number;
   currentFile: string | null;
+  currentDirs: string[];
   errors: string[];
   startedAt: string | null;
   finishedAt: string | null;
@@ -53,6 +54,7 @@ const state: UploadScanState = {
   skipped: 0,
   problems: 0,
   currentFile: null,
+  currentDirs: [],
   errors: [],
   startedAt: null,
   finishedAt: null,
@@ -107,6 +109,7 @@ export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; err
     state.skipped = p.skipped;
     state.problems = p.problems;
     state.currentFile = null;
+    state.currentDirs = [];
     state.errors = [];
     state.startedAt = p.startedAt;
     state.finishedAt = null;
@@ -126,6 +129,7 @@ export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; err
     state.skipped = 0;
     state.problems = 0;
     state.currentFile = null;
+    state.currentDirs = [];
     state.errors = [];
     state.startedAt = new Date().toISOString();
     state.finishedAt = null;
@@ -153,6 +157,7 @@ function persistUploadProgress(current: string | null): void {
 
 function finishUploadScan(resultDirs: number, resultFiles: number): void {
   state.currentFile = null;
+  state.currentDirs = [];
   state.finishedAt = new Date().toISOString();
   const finished = state.status === 'completed' ? 'completed' : 'aborted';
   if (state.runId != null) {
@@ -228,6 +233,9 @@ async function runWalkPhase(uploadBase: string, resume: boolean): Promise<boolea
     skipDirsBefore,
     concurrency: 4,
     onDir: (relDir) => persistUploadProgress(`${WALK_MARKER}@${relDir}`),
+    onWorkerDir: (workerIdx, relDir) => {
+      state.currentDirs[workerIdx] = relDir || '(root)';
+    },
   });
 
   batch.flush();

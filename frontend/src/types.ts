@@ -36,6 +36,7 @@ export interface TargetScanState {
   newFiles: number;
   problems: number;
   currentFile: string | null;
+  currentDirs: string[];
   errors: string[];
   startedAt: string | null;
   finishedAt: string | null;
@@ -53,6 +54,7 @@ export interface UploadScanState {
   skipped: number;
   problems: number;
   currentFile: string | null;
+  currentDirs: string[];
   errors: string[];
   startedAt: string | null;
   finishedAt: string | null;

@@ -31,6 +31,8 @@ export interface WalkOptions {
   skipDirsBefore?: string;
   /** Wird beim Betreten jedes Unterverzeichnisses (relativer Pfad) aufgerufen. */
   onDir?: (relDir: string) => void | Promise<void>;
+  /** Wird von jedem Worker aufgerufen, wenn er ein neues Verzeichnis bearbeitet. */
+  onWorkerDir?: (workerIdx: number, relDir: string) => void;
   /** Max parallel traversed sibling directories (default 1 = sequential). */
   concurrency?: number;
 }
@@ -49,30 +51,31 @@ export async function walkTree(base: string, onFile: (f: ScannedFile, stats: Wal
   const maxConcurrency = opts?.concurrency ?? 1;
 
   /** Simple concurrency pool for parallel directory traversal. */
-  async function runPool<T>(items: T[], fn: (item: T) => Promise<void>): Promise<void> {
+  async function runPool<T>(items: T[], fn: (item: T, workerIdx: number) => Promise<void>): Promise<void> {
     if (maxConcurrency <= 1) {
       for (const item of items) {
         if (shouldAbort?.()) break;
-        await fn(item);
+        await fn(item, 0);
       }
       return;
     }
     let idx = 0;
     const workers = Math.min(maxConcurrency, items.length);
-    async function worker() {
+    async function worker(workerIdx: number) {
       while (idx < items.length) {
         if (shouldAbort?.()) break;
         const i = idx++;
-        await fn(items[i]);
+        await fn(items[i], workerIdx);
       }
     }
-    await Promise.all(Array.from({ length: workers }, () => worker()));
+    await Promise.all(Array.from({ length: workers }, (_, i) => worker(i)));
   }
 
-  async function walk(dir: string, rel: string): Promise<void> {
+  async function walk(dir: string, rel: string, workerIdx = 0): Promise<void> {
     if (shouldAbort?.()) return;
     const skip = opts?.skipDirsBefore;
     if (rel && skip && rel < skip && !skip.startsWith(rel + '/')) return;
+    if (opts?.onWorkerDir) opts.onWorkerDir(workerIdx, rel);
     if (rel !== '' && opts?.onDir) await opts.onDir(rel);
     let entries;
     try {
@@ -111,10 +114,10 @@ export async function walkTree(base: string, onFile: (f: ScannedFile, stats: Wal
 
     // Traverse sibling directories in parallel (within concurrency limit)
     if (dirs.length > 0) {
-      await runPool(dirs, async (entry) => {
+      await runPool(dirs, async (entry, workerIdx) => {
         const abs = path.join(dir, entry.name);
         const childRel = rel ? `${rel}/${entry.name}` : entry.name;
-        await walk(abs, childRel);
+        await walk(abs, childRel, workerIdx);
       });
     }
   }

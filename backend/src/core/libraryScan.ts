@@ -47,6 +47,7 @@ export interface TargetScanState {
   newFiles: number;
   problems: number;
   currentFile: string | null;
+  currentDirs: string[];
   errors: string[];
   startedAt: string | null;
   finishedAt: string | null;
@@ -65,6 +66,7 @@ const state: TargetScanState = {
   newFiles: 0,
   problems: 0,
   currentFile: null,
+  currentDirs: [],
   errors: [],
   startedAt: null,
   finishedAt: null,
@@ -122,6 +124,7 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
     state.newFiles = p.newFilesCount;
     state.problems = p.problems;
     state.currentFile = null;
+    state.currentDirs = [];
     state.errors = [];
     state.startedAt = p.startedAt;
     state.finishedAt = null;
@@ -142,6 +145,7 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
     state.newFiles = 0;
     state.problems = 0;
     state.currentFile = null;
+    state.currentDirs = [];
     state.errors = [];
     state.startedAt = new Date().toISOString();
     state.finishedAt = null;
@@ -169,6 +173,7 @@ function persistTargetProgress(current: string | null): void {
 
 function finishTargetScan(): void {
   state.currentFile = null;
+  state.currentDirs = [];
   state.finishedAt = new Date().toISOString();
   const finished = state.status === 'completed' ? 'completed' : 'aborted';
   if (state.runId != null) {
@@ -259,6 +264,9 @@ async function runWalkPhase(roots: readonly ('fotos' | 'videos')[], resume: bool
       skipDirsBefore: skipDirs.get(root),
       concurrency: 4,
       onDir: (relDir) => persistTargetProgress(`${WALK_MARKER}:${root}@${relDir}`),
+      onWorkerDir: (workerIdx, relDir) => {
+        state.currentDirs[workerIdx] = relDir || '(root)';
+      },
     });
     cumDirs += result.dirs;
     cumFiles += result.files;

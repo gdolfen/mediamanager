@@ -201,7 +201,7 @@ function migrateStoppedStatus(d: DatabaseSync): void {
     run_id INTEGER,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );`);
-  d.exec('INSERT OR IGNORE INTO scan_progress_new SELECT * FROM scan_progress;');
+  d.exec('INSERT OR IGNORE INTO scan_progress_new (scan_type, status, started_at, finished_at, total_dirs, total_files, scanned, current, updated_at, indexed, skipped, linked, new_files_count, problems, run_id) SELECT scan_type, status, started_at, finished_at, total_dirs, total_files, scanned, current, updated_at, indexed, skipped, linked, new_files_count, problems, run_id FROM scan_progress;');
   d.exec('DROP TABLE IF EXISTS scan_progress;');
   d.exec('ALTER TABLE scan_progress_new RENAME TO scan_progress;');
 
@@ -219,7 +219,7 @@ function migrateStoppedStatus(d: DatabaseSync): void {
     skipped INTEGER NOT NULL DEFAULT 0,
     problems INTEGER NOT NULL DEFAULT 0
   );`);
-  d.exec('INSERT OR IGNORE INTO transfer_runs_new SELECT * FROM transfer_runs;');
+  d.exec('INSERT OR IGNORE INTO transfer_runs_new (id, kind, status, started_at, finished_at, scanned, transferred, indexed, new_files, skipped, problems) SELECT id, kind, status, started_at, finished_at, scanned, transferred, indexed, new_files, skipped, problems FROM transfer_runs;');
   d.exec('DROP TABLE IF EXISTS transfer_runs;');
   d.exec('ALTER TABLE transfer_runs_new RENAME TO transfer_runs;');
   d.exec('CREATE INDEX IF NOT EXISTS idx_runs_kind ON transfer_runs(kind);');

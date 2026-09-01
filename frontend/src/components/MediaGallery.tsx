@@ -343,7 +343,7 @@ export function FileInfoCard({ file }: { file: FileRecord }) {
   if (file.sourceSize != null) fileRows.push({ key: 'Größe', value: fmtSize(file.sourceSize) });
   if (file.takenAt) fileRows.push({ key: 'Aufnahmedatum', value: formatDateTime(file.takenAt) });
   if (file.sourceMtime != null) fileRows.push({ key: 'Letzte Änderung', value: formatDateTime(new Date(file.sourceMtime).toISOString()) });
-  fileRows.push({ key: 'Erstellt', value: formatDateTime(file.createdAt) });
+  fileRows.push({ key: 'Indexiert', value: formatDateTime(file.createdAt) });
   if (deviceName(file)) fileRows.push({ key: 'Gerät', value: deviceName(file) });
   if (file.make || file.model) fileRows.push({ key: 'Make/Model', value: `${file.make ?? ''} ${file.model ?? ''}`.trim() });
   fileRows.push({ key: 'Quelle', value: `${file.sourceRoot}: ${file.sourceRelPath}` });

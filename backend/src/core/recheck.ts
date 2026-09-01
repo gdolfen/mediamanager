@@ -58,6 +58,7 @@ export function isRecheckRunning(): boolean {
 export function requestRecheckAbort(): boolean {
   if (!isRecheckRunning()) return false;
   abortRequested = true;
+  clearScanProgress('recheck');
   return true;
 }
 

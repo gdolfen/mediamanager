@@ -23,7 +23,7 @@ import {
 } from '../db/daos.js';
 import { hashFile } from './hash.js';
 import { readImageMeta, readVideoMeta } from './metadata.js';
-import { resolveByExif, resolveByFilename } from './devices.js';
+import { resolveByExif, resolveByFilename, cacheDevices, clearDeviceCache } from './devices.js';
 import { detectFileType, extOf } from './naming.js';
 import { parseDateFromFilename, toLocalIso, differsByDay, localDateKey, isWhatsAppFilename } from './dates.js';
 import { walkTree, type ScannedFile } from './scanner.js';
@@ -101,6 +101,7 @@ export function isTargetScanRunning(): boolean {
 export function requestTargetScanAbort(): boolean {
   if (!isTargetScanRunning()) return false;
   abortRequested = true;
+  clearScanProgress('target');
   return true;
 }
 
@@ -432,6 +433,7 @@ export async function analyzeLibraryFile(
 async function runAnalyzePhase(roots: readonly ('fotos' | 'videos')[]): Promise<void> {
   const ANALYZE_BATCH = 4;
   let analyzed = 0;
+  cacheDevices();
 
   while (!abortRequested) {
     // Get indexed files from all roots
@@ -467,6 +469,7 @@ async function runAnalyzePhase(roots: readonly ('fotos' | 'videos')[]): Promise<
         logger.error('scan', msg);
       }
       state.scanned++;
+      await scanPace();
     }));
 
     analyzed += batch.length;
@@ -474,6 +477,7 @@ async function runAnalyzePhase(roots: readonly ('fotos' | 'videos')[]): Promise<
     if (analyzed % 20 === 0) persistTargetProgress(`${ANALYZE_MARKER}:${analyzed}`);
     await scanPace();
   }
+  clearDeviceCache();
 }
 
 async function runTargetScanInternal(resume: boolean): Promise<void> {

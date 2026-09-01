@@ -11,7 +11,7 @@ import {
 } from '../db/daos.js';
 import { hashFile } from './hash.js';
 import { readImageMeta, readVideoMeta } from './metadata.js';
-import { resolveDevice, deviceDisplayName } from './devices.js';
+import { resolveDevice, deviceDisplayName, cacheDevices, clearDeviceCache } from './devices.js';
 import { buildTargetInfo, detectFileType, extOf, targetFilenameCandidates } from './naming.js';
 import { parseDateFromFilename, differsByDay, localDateKey, toLocalIso, isWhatsAppFilename } from './dates.js';
 import type { ScannedFile } from './scanner.js';

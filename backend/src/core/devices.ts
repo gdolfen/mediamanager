@@ -1,6 +1,12 @@
 import type { Device } from '../types.js';
 import { findDeviceByIdentifier, listDevices } from '../db/daos.js';
 
+let deviceCache: Device[] | null = null;
+
+/** Cache devices for the duration of a scan phase to avoid re-querying per file. */
+export function cacheDevices(): void { deviceCache = listDevices(); }
+export function clearDeviceCache(): void { deviceCache = null; }
+
 export interface DeviceResolution {
   device: Device | null;
   /** Human readable raw identifier that was (or would be) used. */
@@ -44,7 +50,7 @@ export function resolveByExif(make: string | null, model: string | null): Device
 /** Match a device by filename prefix identifiers. */
 export function resolveByFilename(filename: string): DeviceResolution {
   const base = filename.replace(/\.[^.]+$/, '').toLowerCase();
-  const devices = listDevices();
+  const devices = deviceCache ?? listDevices();
   for (const device of devices) {
     for (const ident of device.identifiers) {
       if (ident.kind !== 'filename') continue;

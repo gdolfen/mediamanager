@@ -55,11 +55,18 @@ export function ActionsPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadStatus = useCallback(async () => {
-    try { setTransfer(await api.transferStatus()); } catch { /* ignore */ }
-    try { setUploadScan(await api.uploadScanStatus()); } catch { /* ignore */ }
-    try { setTargetScan(await api.targetScanStatus()); } catch { /* ignore */ }
-    try { setThumbnails(await api.thumbnailStatus()); } catch { /* ignore */ }
-    try { setRuns(await api.runHistory()); } catch { /* ignore */ }
+    const [t, u, ta, th, r] = await Promise.allSettled([
+      api.transferStatus(),
+      api.uploadScanStatus(),
+      api.targetScanStatus(),
+      api.thumbnailStatus(),
+      api.runHistory(),
+    ]);
+    if (t.status === 'fulfilled') setTransfer(t.value);
+    if (u.status === 'fulfilled') setUploadScan(u.value);
+    if (ta.status === 'fulfilled') setTargetScan(ta.value);
+    if (th.status === 'fulfilled') setThumbnails(th.value);
+    if (r.status === 'fulfilled') setRuns(r.value);
   }, []);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
@@ -83,7 +90,7 @@ export function ActionsPage() {
 
   useEffect(() => {
     if (anythingActive && !pollRef.current) {
-      pollRef.current = setInterval(loadStatus, 1000);
+      pollRef.current = setInterval(loadStatus, 2000);
     } else if (!anythingActive && pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;

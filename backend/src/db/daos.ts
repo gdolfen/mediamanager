@@ -926,7 +926,9 @@ function mapRun(r: Row): TransferRun {
 }
 
 export function listRuns(limit = 100): TransferRun[] {
-  const rows = getDb().prepare('SELECT * FROM transfer_runs ORDER BY id DESC LIMIT ?').all(limit) as Row[];
+  const rows = getDb().prepare(
+    'SELECT id, kind, status, started_at, finished_at, scanned, transferred, indexed, new_files, skipped, problems FROM transfer_runs ORDER BY id DESC LIMIT ?'
+  ).all(limit) as Row[];
   return rows.map(mapRun);
 }
 

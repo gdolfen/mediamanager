@@ -16,6 +16,7 @@ import {
 } from '../db/daos.js';
 import { scanUpload } from './scanner.js';
 import { evaluateFile, isSettledFile } from './evaluator.js';
+import { cacheDevices, clearDeviceCache } from './devices.js';
 import { validatePaths } from './transfer.js';
 import { tryAcquire, release } from './active.js';
 import { scanPace } from './pace.js';
@@ -82,6 +83,7 @@ export function isUploadScanRunning(): boolean {
 export function requestUploadScanAbort(): boolean {
   if (!isUploadScanRunning()) return false;
   abortRequested = true;
+  clearScanProgress('upload');
   return true;
 }
 
@@ -250,6 +252,7 @@ async function runWalkPhase(uploadBase: string, resume: boolean): Promise<boolea
 async function runAnalyzePhase(): Promise<void> {
   const ANALYZE_BATCH = 4;
   let analyzed = 0;
+  cacheDevices();
 
   while (!abortRequested) {
     const batch = nextIndexedFiles('upload', ANALYZE_BATCH);
@@ -295,12 +298,14 @@ async function runAnalyzePhase(): Promise<void> {
         logger.error('scan', msg);
       }
       state.scanned++;
+      await scanPace();
     }));
 
     analyzed += batch.length;
     if (analyzed % 20 === 0) persistUploadProgress(`${ANALYZE_MARKER}:${analyzed}`);
     await scanPace();
   }
+  clearDeviceCache();
 }
 
 async function runUploadScanInternal(resume: boolean): Promise<void> {

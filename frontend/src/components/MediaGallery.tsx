@@ -313,7 +313,9 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
         anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         onClose={() => setHover(null)}
-        sx={{ pointerEvents: 'none' }}
+        onMouseEnter={() => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }}
+        onMouseLeave={hideHover}
+        slotProps={{ paper: { sx: { maxHeight: 480, overflow: 'auto' } } }}
       >
         {hover && <FileInfoCard file={hover.file} />}
       </Popover>

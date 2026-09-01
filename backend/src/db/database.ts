@@ -210,7 +210,7 @@ function migrateStoppedStatus(d: DatabaseSync): void {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL DEFAULT 'transfer',
     status TEXT NOT NULL CHECK (status IN ('running','completed','aborted','stopped')),
-    started_at TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
     finished_at TEXT,
     scanned INTEGER NOT NULL DEFAULT 0,
     transferred INTEGER NOT NULL DEFAULT 0,

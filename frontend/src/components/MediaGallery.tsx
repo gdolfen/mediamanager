@@ -37,6 +37,12 @@ import { Thumbnail } from './Thumbnail';
 import { FullscreenGallery } from './FullscreenGallery';
 import { TYPE_META } from '../pages/ProblemsPage';
 import { formatDate, formatDateTime } from '../utils/date';
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+function formatMetaValue(v: string): string {
+  if (ISO_DATE_RE.test(v)) return formatDateTime(v);
+  return v;
+}
 import type { FileRecord } from '../types';
 
 export type SortKey = 'takenAt' | 'originalName' | 'sourceSize' | 'status' | 'deviceName';
@@ -368,7 +374,7 @@ export function FileInfoCard({ file }: { file: FileRecord }) {
           <Stack spacing={0.25}>
             {metaEntries.map(([key, value]) => {
               if (value == null) return null;
-              const v = typeof value === 'object' ? JSON.stringify(value) : String(value);
+              const v = typeof value === 'object' ? JSON.stringify(value) : formatMetaValue(String(value));
               return (
                 <Stack key={key} direction="row" spacing={1} sx={{ borderBottom: '1px solid', borderColor: 'divider', py: 0.25 }}>
                   <Box component="span" sx={{ minWidth: 130, flexShrink: 0, fontWeight: 600, color: 'text.secondary', fontSize: 12 }}>{key}</Box>

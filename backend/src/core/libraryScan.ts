@@ -4,8 +4,7 @@ import { rootBase } from '../db/database.js';
 import {
   getFileBySourcePath,
   getUploadFileByHash,
-  listProblemsForFile,
-  resolveProblem,
+  resolveProblemsForFile,
   updateFile,
   upsertFile,
   upsertProblem,
@@ -411,9 +410,9 @@ export async function analyzeLibraryFile(
   }
 
   /* resolve library problems that no longer apply */
-  const openLibProblems = listProblemsForFile(fileId).filter((p) => !p.resolved && LIBRARY_PROBLEM_TYPES.includes(p.type));
-  for (const p of openLibProblems) {
-    if (!reported.has(p.type)) resolveProblem(p.id);
+  if (reported.size > 0) {
+    const typesToResolve = LIBRARY_PROBLEM_TYPES.filter((t) => !reported.has(t));
+    if (typesToResolve.length) resolveProblemsForFile(fileId, typesToResolve);
   }
 
   /* link matching upload file as imported */
@@ -435,7 +434,7 @@ export async function analyzeLibraryFile(
 
 /** Phase 2: Analyze indexed files (hash, EXIF, device, consistency, linking). */
 async function runAnalyzePhase(roots: readonly ('fotos' | 'videos')[]): Promise<void> {
-  const ANALYZE_BATCH = 4;
+  const ANALYZE_BATCH = 20;
   let analyzed = 0;
   cacheDevices();
 
@@ -479,7 +478,6 @@ async function runAnalyzePhase(roots: readonly ('fotos' | 'videos')[]): Promise<
     analyzed += batch.length;
     state.analyzed = analyzed;
     if (analyzed % 20 === 0) persistTargetProgress(`${ANALYZE_MARKER}:${analyzed}`);
-    await scanPace();
   }
   clearDeviceCache();
 }

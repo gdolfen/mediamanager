@@ -1,5 +1,5 @@
 import type { Device } from '../types.js';
-import { findDeviceByIdentifier, listDevices } from '../db/daos.js';
+import { listDevices } from '../db/daos.js';
 
 let deviceCache: Device[] | null = null;
 
@@ -43,8 +43,18 @@ export function exifIdentifier(make: string | null, model: string | null): strin
 export function resolveByExif(make: string | null, model: string | null): DeviceResolution {
   const raw = exifIdentifier(make, model);
   if (!raw) return { device: null, raw: null, matchedBy: null };
-  const device = findDeviceByIdentifier('exif', raw);
-  return { device, raw, matchedBy: device ? 'exif' : null };
+  // Nutze Device-Cache wenn vorhanden (während Scan), sonst DB
+  const devices = deviceCache ?? listDevices();
+  const rawLower = raw.toLowerCase();
+  for (const device of devices) {
+    for (const ident of device.identifiers) {
+      if (ident.kind !== 'exif') continue;
+      if (ident.value.toLowerCase() === rawLower) {
+        return { device, raw, matchedBy: 'exif' };
+      }
+    }
+  }
+  return { device: null, raw, matchedBy: null };
 }
 
 /** Match a device by filename prefix identifiers. */
@@ -67,13 +77,19 @@ export function resolveByFilename(filename: string): DeviceResolution {
 export function resolveByPath(relDir: string): { resolution: DeviceResolution; info: PathDeviceInfo } {
   const info = pathDeviceInfo(relDir);
   if (!info.relDir) return { resolution: { device: null, raw: null, matchedBy: null }, info };
-  // Try the full folder first, then walk upwards so files in sub-folders
-  // (e.g. "Guido/Sony Alpha 6400/DCIM/...") still match the assigned device.
   const segments = relDir.split('/').filter(Boolean);
+  const devices = deviceCache ?? listDevices();
+  // Try the full folder first, then walk upwards
   for (let i = segments.length; i >= 1; i--) {
     const candidate = segments.slice(0, i).join('/');
-    const device = findDeviceByIdentifier('path', candidate);
-    if (device) return { resolution: { device, raw: candidate, matchedBy: 'path' }, info };
+    for (const device of devices) {
+      for (const ident of device.identifiers) {
+        if (ident.kind !== 'path') continue;
+        if (ident.value === candidate) {
+          return { resolution: { device, raw: candidate, matchedBy: 'path' }, info };
+        }
+      }
+    }
   }
   return { resolution: { device: null, raw: info.relDir, matchedBy: null }, info };
 }

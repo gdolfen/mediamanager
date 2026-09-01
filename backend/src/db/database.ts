@@ -42,6 +42,7 @@ export function getDb(): DatabaseSync {
   migrateFilesMd5(db);
   migrateScanProgressCounters(db);
   migrateFilesStatusIndexed(db);
+  migrateFilesSourceStatusIndex(db);
   seedSettings(db);
   return db;
 }
@@ -172,6 +173,11 @@ function migrateFilesStatusIndexed(d: DatabaseSync): void {
   d.exec('CREATE INDEX IF NOT EXISTS idx_files_md5 ON files(md5);');
   d.exec('COMMIT;');
   d.exec('PRAGMA foreign_keys = ON;');
+}
+
+/** Composite index for nextIndexedFiles queries during analyze phase. */
+function migrateFilesSourceStatusIndex(d: DatabaseSync): void {
+  d.exec('CREATE INDEX IF NOT EXISTS idx_files_source_status_id ON files(source_root, status, id);');
 }
 
 /** Extend transfer_runs into a general run history (kind, indexed, new_files). */

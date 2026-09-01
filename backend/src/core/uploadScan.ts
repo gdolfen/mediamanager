@@ -254,7 +254,7 @@ async function runWalkPhase(uploadBase: string, resume: boolean): Promise<boolea
 
 /** Phase 2: Analyze indexed files (hash, EXIF, device, thumbnail). */
 async function runAnalyzePhase(): Promise<void> {
-  const ANALYZE_BATCH = 4;
+  const ANALYZE_BATCH = 20;
   let analyzed = 0;
   cacheDevices();
 

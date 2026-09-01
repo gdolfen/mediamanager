@@ -2,6 +2,12 @@
 
 Alle wesentlichen Änderungen zu diesem Projekt werden in dieser Datei dokumentiert. Das Format lehnt sich an [Keep a Changelog](https://keepachangelog.com/) an.
 
+## [1.0.2] – 2026-09-01
+
+### Fixed
+
+- **Docker**: `DATA_DIR=/data` wird jetzt im Dockerfile gesetzt, sodass die DB auch bei `docker run` ohne explizite Env-Variable im Volume abgelegt wird
+
 ## [1.0.1] – 2026-09-01
 
 ### Fixed

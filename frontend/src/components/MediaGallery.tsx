@@ -347,11 +347,8 @@ export function FileInfoCard({ file }: { file: FileRecord }) {
   if (file.fileType) fileRows.push({ key: 'Typ', value: file.fileType === 'video' ? 'Video' : 'Bild' });
   fileRows.push({ key: 'Status', value: file.status });
   if (file.sourceSize != null) fileRows.push({ key: 'Größe', value: fmtSize(file.sourceSize) });
-  if (file.takenAt) fileRows.push({ key: 'Aufnahmedatum', value: formatDateTime(file.takenAt) });
   if (file.sourceMtime != null) fileRows.push({ key: 'Letzte Änderung', value: formatDateTime(new Date(file.sourceMtime).toISOString()) });
   fileRows.push({ key: 'Indexiert', value: formatDateTime(file.createdAt) });
-  if (deviceName(file)) fileRows.push({ key: 'Gerät', value: deviceName(file) });
-  if (file.make || file.model) fileRows.push({ key: 'Make/Model', value: `${file.make ?? ''} ${file.model ?? ''}`.trim() });
   fileRows.push({ key: 'Quelle', value: `${file.sourceRoot}: ${file.sourceRelPath}` });
   if (file.targetRoot && file.targetRelPath) fileRows.push({ key: 'Ziel', value: `${file.targetRoot}: ${file.targetRelPath}` });
 

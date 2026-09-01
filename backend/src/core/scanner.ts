@@ -61,7 +61,7 @@ export async function walkTree(base: string, onFile: (f: ScannedFile, stats: Wal
       if (shouldAbort?.()) return;
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (SKIP_DIR_NAMES.has(entry.name)) continue;
+        if (SKIP_DIR_NAMES.has(entry.name) || entry.name.startsWith('.')) continue;
         stats.dirs++;
         await walk(abs, rel ? `${rel}/${entry.name}` : entry.name);
       } else if (entry.isFile()) {

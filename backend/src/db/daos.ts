@@ -344,6 +344,7 @@ export interface ScanProgressRow {
   newFilesCount: number;
   problems: number;
   current: string | null;
+  runId: number | null;
 }
 
 function mapScanProgress(r: Row): ScanProgressRow {
@@ -361,13 +362,14 @@ function mapScanProgress(r: Row): ScanProgressRow {
     newFilesCount: r.new_files_count as number,
     problems: r.problems as number,
     current: r.current as string | null,
+    runId: r.run_id as number | null,
   };
 }
 
 export function saveScanProgress(scanType: string, patch: Partial<Omit<ScanProgressRow, 'scanType'>>): void {
   getDb().prepare(`
-    INSERT INTO scan_progress (scan_type, status, started_at, finished_at, total_dirs, total_files, scanned, indexed, skipped, linked, new_files_count, problems, current)
-    VALUES (@scanType, @status, @startedAt, @finishedAt, @totalDirs, @totalFiles, @scanned, @indexed, @skipped, @linked, @newFilesCount, @problems, @current)
+    INSERT INTO scan_progress (scan_type, status, started_at, finished_at, total_dirs, total_files, scanned, indexed, skipped, linked, new_files_count, problems, current, run_id)
+    VALUES (@scanType, @status, @startedAt, @finishedAt, @totalDirs, @totalFiles, @scanned, @indexed, @skipped, @linked, @newFilesCount, @problems, @current, @runId)
     ON CONFLICT(scan_type) DO UPDATE SET
       status = COALESCE(excluded.status, scan_progress.status),
       started_at = COALESCE(excluded.started_at, scan_progress.started_at),
@@ -381,6 +383,7 @@ export function saveScanProgress(scanType: string, patch: Partial<Omit<ScanProgr
       new_files_count = COALESCE(excluded.new_files_count, scan_progress.new_files_count),
       problems = COALESCE(excluded.problems, scan_progress.problems),
       current = COALESCE(excluded.current, scan_progress.current),
+      run_id = COALESCE(excluded.run_id, scan_progress.run_id),
       updated_at = datetime('now')
   `).run({
     scanType,
@@ -396,6 +399,7 @@ export function saveScanProgress(scanType: string, patch: Partial<Omit<ScanProgr
     newFilesCount: patch.newFilesCount ?? 0,
     problems: patch.problems ?? 0,
     current: patch.current ?? null,
+    runId: patch.runId ?? null,
   });
 }
 

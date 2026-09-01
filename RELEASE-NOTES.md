@@ -2,6 +2,13 @@
 
 Alle wesentlichen Änderungen zu diesem Projekt werden in dieser Datei dokumentiert. Das Format lehnt sich an [Keep a Changelog](https://keepachangelog.com/) an.
 
+## [1.0.4] – 2026-09-01
+
+### Fixed
+
+- **Scan-Fortsetzung**: Ein fortgeführter Scan erstellt keinen neuen Eintrag in der Historie mehr – der ursprüngliche `runId` wird aus `scan_progress` übernommen
+- **Scan-Fortsetzung**: Bereits gezählte Dateien/Ordner werden aus dem abgebrochenen Scan korrekt übernommen
+
 ## [1.0.3] – 2026-09-01
 
 ### Fixed

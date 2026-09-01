@@ -117,6 +117,9 @@ function migrateScanProgressCounters(d: DatabaseSync): void {
   if (!cols.some((c) => c.name === 'problems')) {
     d.exec('ALTER TABLE scan_progress ADD COLUMN problems INTEGER NOT NULL DEFAULT 0');
   }
+  if (!cols.some((c) => c.name === 'run_id')) {
+    d.exec('ALTER TABLE scan_progress ADD COLUMN run_id INTEGER');
+  }
 }
 
 /** Extend transfer_runs into a general run history (kind, indexed, new_files). */

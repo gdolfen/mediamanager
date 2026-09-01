@@ -84,10 +84,10 @@ export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; err
     return { ok: false, error: validation.errors.join('; ') };
   }
   abortRequested = false;
-  const run = startRun('uploadScan');
   const resume = Boolean(opts?.resume && (getScanProgress('upload')?.status === 'running' || getScanProgress('upload')?.status === 'aborted'));
   if (resume) {
     const p = getScanProgress('upload')!;
+    const run = p.runId != null ? { id: p.runId } : startRun('uploadScan');
     state.status = 'running';
     state.runId = run.id;
     state.totalDirs = p.totalDirs;
@@ -103,7 +103,8 @@ export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; err
     logger.info('scan', `Upload-Scan wird fortgesetzt (${p.scanned} gescannt, ${p.indexed} indexiert, ${p.skipped} übersprungen, ${pendingScanCount('upload')} ausstehend).`);
   } else {
     resetScanQueue('upload');
-    saveScanProgress('upload', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, indexed: 0, skipped: 0, problems: 0, current: null });
+    const run = startRun('uploadScan');
+    saveScanProgress('upload', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, indexed: 0, skipped: 0, problems: 0, current: null, runId: run.id });
     state.status = 'running';
     state.runId = run.id;
     state.totalDirs = 0;

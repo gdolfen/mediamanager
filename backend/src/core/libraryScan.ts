@@ -97,10 +97,10 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
   if (isTargetScanRunning()) return { ok: false, error: 'Ein Zielordner-Scan läuft bereits.' };
   if (!tryAcquire('targetScan')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
   abortRequested = false;
-  const run = startRun('targetScan');
   const resume = Boolean(opts?.resume && (getScanProgress('target')?.status === 'running' || getScanProgress('target')?.status === 'aborted'));
   if (resume) {
     const p = getScanProgress('target')!;
+    const run = p.runId != null ? { id: p.runId } : startRun('targetScan');
     state.status = 'running';
     state.runId = run.id;
     state.totalDirs = p.totalDirs;
@@ -116,7 +116,8 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
     logger.info('scan', `Zielordner-Scan wird fortgesetzt (${p.scanned} gescannt, ${p.linked} verknüpft, ${p.newFilesCount} neu, ${pendingScanCount('target')} ausstehend).`);
   } else {
     resetScanQueue('target');
-    saveScanProgress('target', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, linked: 0, newFilesCount: 0, problems: 0, current: null });
+    const run = startRun('targetScan');
+    saveScanProgress('target', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, linked: 0, newFilesCount: 0, problems: 0, current: null, runId: run.id });
     state.status = 'running';
     state.runId = run.id;
     state.totalDirs = 0;

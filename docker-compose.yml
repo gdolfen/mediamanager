@@ -1,0 +1,17 @@
+services:
+  mediamanager:
+    build: .
+    container_name: mediamanager
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - DATA_DIR=/data
+      - UPLOAD_DIR=/upload
+      - FOTOS_DIR=/fotos
+      - VIDEOS_DIR=/videos
+    volumes:
+      - //P/:/upload:ro
+      - //Y/:/fotos
+      - //V/:/videos
+      - ./lokal/data:/data

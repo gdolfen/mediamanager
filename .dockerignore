@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+dist
+**/dist
+data
+*.log
+.git
+.gitignore
+.dockerignore
+.env
+backend/scripts
+frontend/node_modules
+*.db
+*.db-wal
+*.db-shm

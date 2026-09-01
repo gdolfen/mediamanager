@@ -1,0 +1,20 @@
+{
+  "name": "mediamanager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Media sorting tool: moves photos/videos from an upload directory into sorted target directories",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace backend",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "build": "npm run build --workspace backend && npm run build --workspace frontend",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "start": "npm run start --workspace backend"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

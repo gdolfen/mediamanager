@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+.env
+.DS_Store
+data/
+data.db
+data.db-journal
+data.db-wal
+data.db-shm
+uploads-tmp/
+lokal/

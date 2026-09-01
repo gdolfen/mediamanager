@@ -1,6 +1,6 @@
 {
   "name": "mediamanager",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Media sorting tool: moves photos/videos from an upload directory into sorted target directories",
   "workspaces": [

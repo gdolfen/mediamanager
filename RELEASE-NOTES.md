@@ -2,7 +2,13 @@
 
 Alle wesentlichen Änderungen zu diesem Projekt werden in dieser Datei dokumentiert. Das Format lehnt sich an [Keep a Changelog](https://keepachangelog.com/) an.
 
-## [0.1.0] – 2026-09-01
+## [1.0.1] – 2026-09-01
+
+### Fixed
+
+- **Scan**: Ordner die mit `.` starten (z.B. `.DS_Store`, `.cache`) werden jetzt ignoriert
+
+## [1.0.0] – 2026-09-01
 
 Initiales Release von **MediaManager**.
 

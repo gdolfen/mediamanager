@@ -10,7 +10,7 @@ RUN npm ci --workspaces --include-workspace-root
 FROM deps AS backend-build
 COPY backend backend
 RUN npm run build --workspace backend
-RUN find backend/dist -name '*.js' | xargs npx -y esbuild --minify --allow-overwrite --platform=node
+RUN find backend/dist -name '*.js' | xargs npx -y esbuild --minify --allow-overwrite --platform=node --outdir=backend/dist
 
 # ── Layer 3: Build frontend (vite already minifies) ──
 FROM deps AS frontend-build

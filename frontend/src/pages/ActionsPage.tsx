@@ -54,26 +54,30 @@ export function ActionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingRef = useRef(false);
 
   const loadStatus = useCallback(async () => {
-    const [t, u, ta, th] = await Promise.allSettled([
-      api.transferStatus(),
-      api.uploadScanStatus(),
-      api.targetScanStatus(),
-      api.thumbnailStatus(),
-    ]);
-    if (t.status === 'fulfilled') setTransfer(t.value);
-    if (u.status === 'fulfilled') setUploadScan(u.value);
-    if (ta.status === 'fulfilled') setTargetScan(ta.value);
-    if (th.status === 'fulfilled') setThumbnails(th.value);
+    if (pollingRef.current) return;
+    pollingRef.current = true;
+    try {
+      const [t, u, ta, th, r] = await Promise.allSettled([
+        api.transferStatus(),
+        api.uploadScanStatus(),
+        api.targetScanStatus(),
+        api.thumbnailStatus(),
+        api.runHistory(),
+      ]);
+      if (t.status === 'fulfilled') setTransfer(t.value);
+      if (u.status === 'fulfilled') setUploadScan(u.value);
+      if (ta.status === 'fulfilled') setTargetScan(ta.value);
+      if (th.status === 'fulfilled') setThumbnails(th.value);
+      if (r.status === 'fulfilled') setRuns(r.value);
+    } finally {
+      pollingRef.current = false;
+    }
   }, []);
 
-  const loadRuns = useCallback(async () => {
-    const r = await api.runHistory().catch(() => null);
-    if (r) setRuns(r);
-  }, []);
-
-  useEffect(() => { loadStatus(); loadRuns(); }, [loadStatus, loadRuns]);
+  useEffect(() => { loadStatus(); }, [loadStatus]);
 
   const transferRunning = transfer?.status === 'running';
   const uploadRunning = uploadScan?.status === 'running';
@@ -346,7 +350,7 @@ export function ActionsPage() {
           <CardContent>
             <Stack direction="row" alignItems="center" justifyContent="space-between">
               <Typography variant="h6" gutterBottom>Historie (Scans & Übertragungen)</Typography>
-              <Button variant="outlined" startIcon={<RefreshIcon />} onClick={() => { loadStatus(); loadRuns(); }}>Aktualisieren</Button>
+              <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadStatus}>Aktualisieren</Button>
             </Stack>
             <Table size="small">
               <TableHead>

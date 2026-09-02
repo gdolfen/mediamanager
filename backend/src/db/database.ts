@@ -44,6 +44,7 @@ export function getDb(): DatabaseSync {
   migrateFilesStatusIndexed(db);
   migrateFilesSourceStatusIndex(db);
   migrateStoppedStatus(db);
+  migrateRunTotals(db);
   seedSettings(db);
   return db;
 }
@@ -212,6 +213,8 @@ function migrateStoppedStatus(d: DatabaseSync): void {
     status TEXT NOT NULL CHECK (status IN ('running','completed','aborted','stopped')),
     started_at TEXT NOT NULL DEFAULT (datetime('now')),
     finished_at TEXT,
+    total_dirs INTEGER NOT NULL DEFAULT 0,
+    total_files INTEGER NOT NULL DEFAULT 0,
     scanned INTEGER NOT NULL DEFAULT 0,
     transferred INTEGER NOT NULL DEFAULT 0,
     indexed INTEGER NOT NULL DEFAULT 0,
@@ -223,6 +226,17 @@ function migrateStoppedStatus(d: DatabaseSync): void {
   d.exec('DROP TABLE IF EXISTS transfer_runs;');
   d.exec('ALTER TABLE transfer_runs_new RENAME TO transfer_runs;');
   d.exec('CREATE INDEX IF NOT EXISTS idx_runs_kind ON transfer_runs(kind);');
+}
+
+/** Add total_dirs/total_files to the run history table. */
+function migrateRunTotals(d: DatabaseSync): void {
+  const cols = d.prepare('PRAGMA table_info(transfer_runs)').all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'total_dirs')) {
+    d.exec('ALTER TABLE transfer_runs ADD COLUMN total_dirs INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!cols.some((c) => c.name === 'total_files')) {
+    d.exec('ALTER TABLE transfer_runs ADD COLUMN total_files INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 /** Extend transfer_runs into a general run history (kind, indexed, new_files). */

@@ -156,6 +156,8 @@ async function runTransferInternal(runId: number): Promise<void> {
       }
       state.scanned++;
       updateRun(runId, {
+        totalDirs: state.totalDirs,
+        totalFiles: state.totalFiles,
         scanned: state.scanned,
         transferred: state.transferred,
         skipped: state.skipped,
@@ -180,7 +182,7 @@ async function runTransferInternal(runId: number): Promise<void> {
     updateRun(runId, { status: 'aborted' });
   }
   state.finishedAt = new Date().toISOString();
-  updateRun(runId, { problems: state.problems });
+  updateRun(runId, { totalDirs: state.totalDirs, totalFiles: state.totalFiles, problems: state.problems });
   release('transfer');
 }
 

@@ -96,7 +96,7 @@ export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; err
     return { ok: false, error: validation.errors.join('; ') };
   }
   abortRequested = false;
-  const resume = Boolean(opts?.resume && (getScanProgress('upload')?.status === 'running' || getScanProgress('upload')?.status === 'aborted'));
+  const resume = Boolean(opts?.resume && ['running', 'aborted', 'stopped'].includes(getScanProgress('upload')?.status ?? ''));
   if (resume) {
     const p = getScanProgress('upload')!;
     const run = p.runId != null ? { id: p.runId } : startRun('uploadScan');
@@ -157,7 +157,7 @@ function persistUploadProgress(current: string | null): void {
     current,
   });
   if (state.runId != null) {
-    updateRun(state.runId, { scanned: state.scanned, indexed: state.indexed, skipped: state.skipped, problems: state.problems });
+    updateRun(state.runId, { totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, indexed: state.indexed, skipped: state.skipped, problems: state.problems });
   }
 }
 
@@ -167,7 +167,7 @@ function finishUploadScan(resultDirs: number, resultFiles: number): void {
   state.finishedAt = new Date().toISOString();
   const finished = state.status === 'completed' ? 'completed' : state.status === 'stopped' ? 'stopped' : 'aborted';
   if (state.runId != null) {
-    updateRun(state.runId, { status: finished, scanned: state.scanned, indexed: state.indexed, skipped: state.skipped, problems: state.problems });
+    updateRun(state.runId, { status: finished, totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, indexed: state.indexed, skipped: state.skipped, problems: state.problems });
     state.runId = null;
   }
   if (state.status === 'completed') {
@@ -277,7 +277,10 @@ async function runAnalyzePhase(): Promise<void> {
       }
     },
     onProgress: (analyzed) => {
-      if (analyzed % 20 === 0) persistUploadProgress(`${ANALYZE_MARKER}:${analyzed}`);
+      if (analyzed % 20 === 0) {
+        state.indexed = indexedCount('upload');
+        persistUploadProgress(`${ANALYZE_MARKER}:${analyzed}`);
+      }
     },
     onError: (msg) => {
       state.errors.push(msg);

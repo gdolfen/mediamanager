@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -116,11 +116,11 @@ function MediaTile({ file, size, onClick, onOpenDevice, onMouseEnter, onMouseLea
     >
       <Box sx={{ position: 'relative' }}>
         <Thumbnail fileId={file.id} fileType={file.fileType} size={size} noDialog />
-        <Box sx={{ position: 'absolute', top: 4, right: 4 }}>{problemBadge(file)}</Box>
-        <Box sx={{ position: 'absolute', bottom: 4, left: 4 }}>
+        <Box sx={{ position: 'absolute', top: 4, right: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.25 }}>
           {file.status === 'transferred' && <CheckCircleIcon fontSize="small" sx={{ color: 'success.main', opacity: 0.8 }} />}
           {file.status === 'indexed' && <SearchIcon fontSize="small" sx={{ color: 'info.main', opacity: 0.8 }} />}
           {file.status === 'pending' && <ScheduleIcon fontSize="small" sx={{ color: 'warning.main', opacity: 0.8 }} />}
+          {problemBadge(file)}
         </Box>
       </Box>
       <Box sx={{ px: 0.5, pb: 0.5 }}>
@@ -151,7 +151,7 @@ function MediaTile({ file, size, onClick, onOpenDevice, onMouseEnter, onMouseLea
   );
 }
 
-export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDevice, customTile }: {
+export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDevice, customTile, sortKey = 'takenAt', sortDir = 'desc', onSortChange }: {
   files: FileRecord[];
   total?: number;
   page?: number;
@@ -159,15 +159,14 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
   onOpenImage: (id: number) => void;
   onOpenDevice?: (id: number) => void;
   customTile?: (file: FileRecord) => React.ReactNode;
+  sortKey?: SortKey;
+  sortDir?: SortDir;
+  onSortChange?: (key: SortKey, dir: SortDir) => void;
 }) {
   const [view, setView] = useState<'grid' | 'list'>('grid');
-  const [sortKey, setSortKey] = useState<SortKey>('takenAt');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [hover, setHover] = useState<{ file: FileRecord; anchor: HTMLElement } | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const sorted = useMemo(() => sortFiles(files, sortKey, sortDir), [files, sortKey, sortDir]);
 
   const showHover = (file: FileRecord, anchor: HTMLElement) => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
@@ -179,8 +178,8 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
   };
 
   const toggleSort = (key: SortKey) => {
-    if (key === sortKey) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-    else { setSortKey(key); setSortDir('desc'); }
+    const newDir = key === sortKey ? (sortDir === 'asc' ? 'desc' : 'asc') : 'desc';
+    onSortChange?.(key, newDir);
   };
 
   return (
@@ -195,12 +194,12 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
           <Select
             label="Sortieren"
             value={sortKey}
-            onChange={(e) => { setSortKey(e.target.value as SortKey); setSortDir('desc'); }}
+            onChange={(e) => onSortChange?.(e.target.value as SortKey, 'desc')}
           >
             {SORT_OPTIONS.map((o) => <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>)}
           </Select>
         </FormControl>
-        <IconButton size="small" title={sortDir === 'asc' ? 'Aufsteigend' : 'Absteigend'} onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')}>
+        <IconButton size="small" title={sortDir === 'asc' ? 'Aufsteigend' : 'Absteigend'} onClick={() => onSortChange?.(sortKey, sortDir === 'asc' ? 'desc' : 'asc')}>
           {sortDir === 'asc' ? <ArrowUpwardIcon fontSize="small" /> : <ArrowDownwardIcon fontSize="small" />}
         </IconButton>
         {total != null && <Typography variant="body2" color="text.secondary">{total} gesamt</Typography>}
@@ -208,7 +207,7 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
 
       {view === 'grid' ? (
         <Grid container spacing={1.5}>
-          {sorted.map((f, i) => (
+          {files.map((f, i) => (
             <Grid item key={f.id} xs={6} sm={4} md={3} lg={2}>
               {customTile ? (
                 <Box sx={{ cursor: 'pointer' }} onClick={() => setOpenIndex(i)}>
@@ -226,7 +225,7 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
               )}
             </Grid>
           ))}
-          {sorted.length === 0 && <Grid item xs={12}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>Keine Medien gefunden.</Typography></Grid>}
+          {files.length === 0 && <Grid item xs={12}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>Keine Medien gefunden.</Typography></Grid>}
         </Grid>
       ) : (
         <TableContainer component={Paper}>
@@ -254,7 +253,7 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
               </TableRow>
             </TableHead>
             <TableBody>
-              {sorted.map((f, i) => (
+              {files.map((f, i) => (
                 <TableRow key={f.id} hover sx={{ cursor: 'pointer' }} onClick={() => setOpenIndex(i)}>
                   <TableCell sx={{ p: 0.5 }}>
                     <Box onClick={(e) => { e.stopPropagation(); setOpenIndex(i); }}>
@@ -297,7 +296,7 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
                   </TableCell>
                 </TableRow>
               ))}
-              {sorted.length === 0 && (
+              {files.length === 0 && (
                 <TableRow><TableCell colSpan={8}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>Keine Medien gefunden.</Typography></TableCell></TableRow>
               )}
             </TableBody>
@@ -326,10 +325,10 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
         {hover && <FileInfoCard file={hover.file} />}
       </Popover>
 
-      {openIndex != null && sorted.length > 0 && (
+      {openIndex != null && files.length > 0 && (
         <FullscreenGallery
-          files={sorted}
-          index={Math.min(openIndex, sorted.length - 1)}
+          files={files}
+          index={Math.min(openIndex, files.length - 1)}
           onIndexChange={setOpenIndex}
           onClose={() => setOpenIndex(null)}
           onOpenDetails={(id) => { setOpenIndex(null); onOpenImage(id); }}

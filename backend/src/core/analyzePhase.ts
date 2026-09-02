@@ -37,18 +37,20 @@ export async function runAnalyzePhase(
   callbacks: AnalyzeCallbacks,
 ): Promise<number> {
   let analyzed = 0;
+  const processedIds = new Set<number>();
 
   while (!callbacks.shouldAbort()) {
     const batch: AnalyzeItem[] = [];
     for (const root of roots) {
       const remaining = ANALYZE_BATCH - batch.length;
       if (remaining <= 0) break;
-      const items = nextIndexedFiles(root, remaining);
+      const items = nextIndexedFiles(root, remaining, processedIds);
       batch.push(...items.map((i) => ({ ...i, sourceRoot: root })));
     }
     if (!batch.length) break;
 
     await Promise.all(batch.map(async (item) => {
+      processedIds.add(item.id);
       if (callbacks.shouldAbort()) return;
       const base = rootBase(item.sourceRoot as 'upload' | 'fotos' | 'videos');
       const abs = path.join(base, item.relPath);

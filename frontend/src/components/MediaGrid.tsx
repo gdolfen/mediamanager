@@ -1,6 +1,7 @@
 import React from 'react';
 import { MediaGallery, FileInfoCard, deviceName } from './MediaGallery';
 import type { FileRecord } from '../types';
+import type { SortKey, SortDir } from './MediaGallery';
 
 export { FileInfoCard, deviceName };
 export type { SortKey, SortDir } from './MediaGallery';
@@ -13,6 +14,9 @@ export function MediaGrid(props: {
   onPage?: (p: number) => void;
   onOpenImage: (id: number) => void;
   onOpenDevice?: (id: number) => void;
+  sortKey?: SortKey;
+  sortDir?: SortDir;
+  onSortChange?: (key: SortKey, dir: SortDir) => void;
 }) {
   return <MediaGallery {...props} />;
 }

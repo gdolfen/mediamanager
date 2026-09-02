@@ -108,7 +108,7 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
   if (isTargetScanRunning()) return { ok: false, error: 'Ein Zielordner-Scan läuft bereits.' };
   if (!tryAcquire('targetScan')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
   abortRequested = false;
-  const resume = Boolean(opts?.resume && (getScanProgress('target')?.status === 'running' || getScanProgress('target')?.status === 'aborted'));
+  const resume = Boolean(opts?.resume && ['running', 'aborted', 'stopped'].includes(getScanProgress('target')?.status ?? ''));
   if (resume) {
     const p = getScanProgress('target')!;
     const run = p.runId != null ? { id: p.runId } : startRun('targetScan');
@@ -171,7 +171,7 @@ function persistTargetProgress(current: string | null): void {
     current,
   });
   if (state.runId != null) {
-    updateRun(state.runId, { scanned: state.scanned, transferred: state.linked, newFiles: state.newFiles, problems: state.problems });
+    updateRun(state.runId, { totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, transferred: state.linked, newFiles: state.newFiles, problems: state.problems });
   }
 }
 
@@ -181,7 +181,7 @@ function finishTargetScan(): void {
   state.finishedAt = new Date().toISOString();
   const finished = state.status === 'completed' ? 'completed' : state.status === 'stopped' ? 'stopped' : 'aborted';
   if (state.runId != null) {
-    updateRun(state.runId, { status: finished, scanned: state.scanned, transferred: state.linked, newFiles: state.newFiles, problems: state.problems });
+    updateRun(state.runId, { status: finished, totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, transferred: state.linked, newFiles: state.newFiles, problems: state.problems });
     state.runId = null;
   }
   if (state.status === 'completed') {
@@ -446,7 +446,12 @@ async function runAnalyzePhase(roots: readonly ('fotos' | 'videos')[]): Promise<
     },
     onProgress: (analyzed) => {
       state.analyzed = analyzed;
-      if (analyzed % 20 === 0) persistTargetProgress(`${ANALYZE_MARKER}:${analyzed}`);
+      if (analyzed % 20 === 0) {
+        let totalIndexed = 0;
+        for (const root of roots) totalIndexed += indexedCount(root);
+        state.indexed = totalIndexed;
+        persistTargetProgress(`${ANALYZE_MARKER}:${analyzed}`);
+      }
     },
     onError: (msg) => {
       state.errors.push(msg);

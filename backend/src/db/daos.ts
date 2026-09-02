@@ -277,6 +277,8 @@ export function listFiles(opts: {
   deviceKey?: string;
   person?: string;
   personNull?: boolean;
+  sort?: string;
+  sortDir?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }): { rows: FileRecord[]; total: number } {
@@ -323,8 +325,11 @@ export function listFiles(opts: {
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const total = (getDb().prepare(`SELECT COUNT(*) AS c FROM files f LEFT JOIN devices d ON d.id = f.device_id ${whereSql}`).get(...params) as Row).c as number;
+  const sortCol = opts.sort === 'takenAt' ? 'f.taken_at' : opts.sort === 'originalName' ? 'f.original_name' : opts.sort === 'sourceSize' ? 'f.source_size' : opts.sort === 'status' ? 'f.status' : opts.sort === 'deviceName' ? 'COALESCE(d.mapped_name, \'\')' : 'f.id';
+  const sortDir = opts.sortDir === 'asc' ? 'ASC' : 'DESC';
+  const nullsLast = opts.sort === 'takenAt' ? '(f.taken_at IS NULL OR f.taken_at = \'\') ASC, ' : '';
   const rows = getDb()
-    .prepare(`SELECT ${FILE_COLUMNS} FROM files f LEFT JOIN devices d ON d.id = f.device_id ${whereSql} ORDER BY f.id DESC LIMIT ? OFFSET ?`)
+    .prepare(`SELECT ${FILE_COLUMNS} FROM files f LEFT JOIN devices d ON d.id = f.device_id ${whereSql} ORDER BY ${nullsLast}${sortCol} ${sortDir}, f.id DESC LIMIT ? OFFSET ?`)
     .all(...params, opts.limit, opts.offset) as Row[];
   return { rows: rows.map(mapFile), total };
 }
@@ -514,7 +519,16 @@ export interface IndexedFile {
 }
 
 /** Get files with status='indexed' that need analysis (Phase 2). */
-export function nextIndexedFiles(sourceRoot: string, limit = 4): IndexedFile[] {
+export function nextIndexedFiles(sourceRoot: string, limit = 4, excludeIds?: Set<number>): IndexedFile[] {
+  if (excludeIds && excludeIds.size === 0) excludeIds = undefined;
+  if (excludeIds) {
+    const ids = Array.from(excludeIds);
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = getDb().prepare(
+      `SELECT id, source_root, source_rel_path FROM files WHERE source_root = ? AND status = ? AND id NOT IN (${placeholders}) ORDER BY id LIMIT ?`
+    ).all(sourceRoot, 'indexed', ...ids, limit) as Row[];
+    return rows.map((r) => ({ id: r.id as number, sourceRoot: r.source_root as string, relPath: r.source_rel_path as string }));
+  }
   const rows = getDb().prepare(
     'SELECT id, source_root, source_rel_path FROM files WHERE source_root = ? AND status = ? ORDER BY id LIMIT ?'
   ).all(sourceRoot, 'indexed', limit) as Row[];
@@ -897,6 +911,8 @@ export function updateRun(id: number, patch: Partial<Omit<TransferRun, 'id' | 's
   const fields: string[] = [];
   const values: Array<string | number | bigint | null> = [];
   if (patch.status !== undefined) { fields.push('status = ?'); values.push(patch.status); }
+  if (patch.totalDirs !== undefined) { fields.push('total_dirs = ?'); values.push(patch.totalDirs); }
+  if (patch.totalFiles !== undefined) { fields.push('total_files = ?'); values.push(patch.totalFiles); }
   if (patch.scanned !== undefined) { fields.push('scanned = ?'); values.push(patch.scanned); }
   if (patch.transferred !== undefined) { fields.push('transferred = ?'); values.push(patch.transferred); }
   if (patch.indexed !== undefined) { fields.push('indexed = ?'); values.push(patch.indexed); }
@@ -916,6 +932,8 @@ function mapRun(r: Row): TransferRun {
     status: r.status as TransferRun['status'],
     startedAt: r.started_at as string,
     finishedAt: r.finished_at as string | null,
+    totalDirs: r.total_dirs as number,
+    totalFiles: r.total_files as number,
     scanned: r.scanned as number,
     transferred: r.transferred as number,
     indexed: r.indexed as number,
@@ -927,7 +945,7 @@ function mapRun(r: Row): TransferRun {
 
 export function listRuns(limit = 100): TransferRun[] {
   const rows = getDb().prepare(
-    'SELECT id, kind, status, started_at, finished_at, scanned, transferred, indexed, new_files, skipped, problems FROM transfer_runs ORDER BY id DESC LIMIT ?'
+    'SELECT id, kind, status, started_at, finished_at, total_dirs, total_files, scanned, transferred, indexed, new_files, skipped, problems FROM transfer_runs ORDER BY id DESC LIMIT ?'
   ).all(limit) as Row[];
   return rows.map(mapRun);
 }
@@ -936,6 +954,11 @@ export function getLatestRun(): TransferRun | null {
   const row = getDb().prepare('SELECT * FROM transfer_runs ORDER BY id DESC LIMIT 1').get() as Row | undefined;
   if (!row) return null;
   return mapRun(row);
+}
+
+export function deleteRun(id: number): boolean {
+  const result = getDb().prepare('DELETE FROM transfer_runs WHERE id = ?').run(id);
+  return Number(result.changes) > 0;
 }
 
 export function countMediaFiles(): number {
@@ -983,6 +1006,8 @@ export function listLibraryFiles(opts: {
   day?: number;
   type?: string;
   search?: string;
+  sort?: string;
+  sortDir?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }): { rows: FileRecord[]; total: number } {
@@ -1011,8 +1036,11 @@ export function listLibraryFiles(opts: {
   }
   const whereSql = `WHERE ${where.join(' AND ')}`;
   const total = (getDb().prepare(`SELECT COUNT(*) AS c FROM files f LEFT JOIN devices d ON d.id = f.device_id ${whereSql}`).get(...params) as Row).c as number;
+  const sortCol = opts.sort === 'takenAt' ? 'f.taken_at' : opts.sort === 'originalName' ? 'f.original_name' : opts.sort === 'sourceSize' ? 'f.source_size' : opts.sort === 'status' ? 'f.status' : opts.sort === 'deviceName' ? 'COALESCE(d.mapped_name, \'\')' : 'f.taken_at';
+  const sortDir = opts.sortDir === 'asc' ? 'ASC' : 'DESC';
+  const nullsLast = opts.sort === 'takenAt' ? '(f.taken_at IS NULL OR f.taken_at = \'\') ASC, ' : '';
   const rows = getDb()
-    .prepare(`SELECT ${FILE_COLUMNS} FROM files f LEFT JOIN devices d ON d.id = f.device_id ${whereSql} ORDER BY f.taken_at DESC, f.id DESC LIMIT ? OFFSET ?`)
+    .prepare(`SELECT ${FILE_COLUMNS} FROM files f LEFT JOIN devices d ON d.id = f.device_id ${whereSql} ORDER BY ${nullsLast}${sortCol} ${sortDir}, f.id DESC LIMIT ? OFFSET ?`)
     .all(...params, opts.limit, opts.offset) as Row[];
   const files = rows.map(mapFile);
   attachProblems(files);

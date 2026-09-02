@@ -41,8 +41,8 @@ export const TYPE_META: Record<ProblemType, { label: string; color: 'error' | 'w
   READ_ERROR: { label: 'Nicht lesbar', color: 'error' },
   DEVICE_PERIOD_DEVIATION: { label: 'Außerhalb Nutzungszeit', color: 'info' },
   FILE_MTIME_BEFORE_BIRTHTIME: { label: 'Änderungszeit vor Erstellzeit', color: 'info' },
-  LIBRARY_META_FILENAME_MISMATCH: { label: 'Bibliothek: Meta vs. Dateiname', color: 'warning' },
-  LIBRARY_META_FILETIME_MISMATCH: { label: 'Bibliothek: Meta vs. Dateizeit', color: 'warning' },
+  LIBRARY_META_FILENAME_MISMATCH: { label: 'Bibliothek: Meta vs. Dateiname', color: 'info' },
+  LIBRARY_META_FILETIME_MISMATCH: { label: 'Bibliothek: Meta vs. Dateizeit', color: 'info' },
   LIBRARY_FILENAME_FILETIME_MISMATCH: { label: 'Bibliothek: Dateiname vs. Dateizeit', color: 'warning' },
   LIBRARY_PATH_MISMATCH: { label: 'Bibliothek: Pfad passt nicht', color: 'warning' },
 };

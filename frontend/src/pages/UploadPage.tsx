@@ -8,6 +8,7 @@ import {
   CardActionArea,
   CardContent,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -42,7 +43,7 @@ import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { api } from '../api/client';
-import { MediaGallery } from '../components/MediaGallery';
+import { MediaGallery, type SortKey, type SortDir } from '../components/MediaGallery';
 import { Thumbnail } from '../components/Thumbnail';
 import { deviceName as fileDeviceName } from '../components/MediaGallery';
 import { formatDate } from '../utils/date';
@@ -82,6 +83,9 @@ export function UploadPage({ onOpenImage, onOpenDevice }: {
   const [status, setStatus] = useState<string>('');
   const [search, setSearch] = useState('');
   const [showIgnored, setShowIgnored] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>('takenAt');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ignoredDialog, setIgnoredDialog] = useState(false);
   const [ignoredItems, setIgnoredItems] = useState<IgnoredItem[]>([]);
@@ -89,6 +93,7 @@ export function UploadPage({ onOpenImage, onOpenDevice }: {
 
   const loadGroups = useCallback(async () => {
     try {
+      setLoading(true);
       if (level === 'persons') {
         setGroups(await api.uploadGroups(1));
       } else if (level === 'devices') {
@@ -101,12 +106,15 @@ export function UploadPage({ onOpenImage, onOpenDevice }: {
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
   }, [level, selectedPerson, selectedDeviceKey]);
 
   const loadFiles = useCallback(async () => {
     if (level !== 'files') return;
     try {
+      setLoading(true);
       const res = await api.listFiles({
         sourceRoot: 'upload',
         status: status ? status as FileStatus : undefined,
@@ -117,6 +125,8 @@ export function UploadPage({ onOpenImage, onOpenDevice }: {
         yearNull: selectedYear === 'Unbekannt' ? true : undefined,
         person: selectedPerson || undefined,
         deviceKey: selectedDeviceKey || undefined,
+        sort: sortKey,
+        sortDir,
         page,
         limit: 120,
       });
@@ -125,8 +135,10 @@ export function UploadPage({ onOpenImage, onOpenDevice }: {
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
-  }, [level, selectedYear, selectedPerson, selectedDeviceKey, status, type, search, page, showIgnored]);
+  }, [level, selectedYear, selectedPerson, selectedDeviceKey, status, type, search, page, showIgnored, sortKey, sortDir]);
 
   useEffect(() => { if (level !== 'files') loadGroups(); }, [loadGroups, level]);
   useEffect(() => { loadFiles(); }, [loadFiles]);
@@ -223,6 +235,8 @@ export function UploadPage({ onOpenImage, onOpenDevice }: {
 
       {error && <Grid item xs={12}><Alert severity="error" onClose={() => setError(null)}>{error}</Alert></Grid>}
 
+      {loading && <Grid item xs={12}><Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box></Grid>}
+
       <Grid item xs={12}>
         <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
           <Breadcrumbs separator={<ChevronRightIcon fontSize="small" />}>{breadcrumbs}</Breadcrumbs>
@@ -290,6 +304,9 @@ export function UploadPage({ onOpenImage, onOpenDevice }: {
             onPage={setPage}
             onOpenImage={onOpenImage}
             onOpenDevice={onOpenDevice}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSortChange={(k, d) => { setSortKey(k); setSortDir(d); setPage(1); }}
             customTile={(file) => (
               <UploadMediaTile
                 file={file}

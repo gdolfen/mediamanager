@@ -75,13 +75,13 @@ export const PROBLEM_CATALOG: Record<ProblemType, ProblemTypeDef> = {
   },
   LIBRARY_META_FILENAME_MISMATCH: {
     type: 'LIBRARY_META_FILENAME_MISMATCH',
-    severity: 'warning',
+    severity: 'info',
     label: 'Meta-Datum weicht vom Dateinamen ab',
     actions: [{ id: 'ignore', label: 'Ignorieren' }],
   },
   LIBRARY_META_FILETIME_MISMATCH: {
     type: 'LIBRARY_META_FILETIME_MISMATCH',
-    severity: 'warning',
+    severity: 'info',
     label: 'Meta-Datum weicht von Dateizeit ab',
     actions: [{ id: 'ignore', label: 'Ignorieren' }],
   },

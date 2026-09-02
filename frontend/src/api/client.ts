@@ -62,7 +62,7 @@ export const api = {
   adoptDevice: (data: { mappedName?: string; identifierValue: string; identifierKind?: 'exif' | 'path'; person?: string | null; deviceId?: number }) =>
     request<{ ok: boolean; device: Device; assigned: number; added?: boolean }>('POST', '/devices/adopt', data),
 
-  listFiles: (params: { status?: FileStatus; search?: string; root?: string; sourceRoot?: string; type?: string; ext?: string; identifierKind?: 'exif' | 'path'; identifierValue?: string; includeIgnored?: boolean; year?: number; yearNull?: boolean; deviceId?: number; deviceNull?: boolean; deviceKey?: string; person?: string; personNull?: boolean; page?: number; limit?: number }) => {
+  listFiles: (params: { status?: FileStatus; search?: string; root?: string; sourceRoot?: string; type?: string; ext?: string; identifierKind?: 'exif' | 'path'; identifierValue?: string; includeIgnored?: boolean; year?: number; yearNull?: boolean; deviceId?: number; deviceNull?: boolean; deviceKey?: string; person?: string; personNull?: boolean; sort?: string; sortDir?: 'asc' | 'desc'; page?: number; limit?: number }) => {
     const q = new URLSearchParams();
     if (params.status) q.set('status', params.status);
     if (params.search) q.set('search', params.search);
@@ -80,6 +80,8 @@ export const api = {
     else if (params.deviceNull) q.set('deviceId', 'null');
     if (params.person) q.set('person', params.person);
     else if (params.personNull) q.set('person', 'null');
+    if (params.sort) q.set('sort', params.sort);
+    if (params.sortDir) q.set('sortDir', params.sortDir);
     q.set('page', String(params.page ?? 1));
     q.set('limit', String(params.limit ?? 50));
     return request<{ rows: FileRecord[]; total: number; page: number; limit: number }>('GET', `/files?${q}`);
@@ -108,19 +110,22 @@ export const api = {
   abortTransfer: () => request<{ ok: boolean }>('POST', '/transfer/abort'),
   transferStatus: () => request<TransferState>('GET', '/transfer/status'),
   runHistory: () => request<RunRecord[]>('GET', '/runs'),
+  deleteRun: (id: number) => request<{ ok: boolean }>('DELETE', `/runs/${id}`),
   thumbnailStatus: () => request<ThumbnailStatus>('GET', '/thumbnails/status'),
 
   formats: () => request<FormatInfo[]>('GET', '/formats'),
   stats: () => request<Stats>('GET', '/stats'),
 
   libraryGroups: () => request<LibraryGroup[]>('GET', '/library/groups'),
-  libraryFiles: (params: { year?: number; month?: number; day?: number; type?: string; search?: string; page?: number; limit?: number }) => {
+  libraryFiles: (params: { year?: number; month?: number; day?: number; type?: string; search?: string; sort?: string; sortDir?: 'asc' | 'desc'; page?: number; limit?: number }) => {
     const q = new URLSearchParams();
     if (params.year !== undefined) q.set('year', String(params.year));
     if (params.month !== undefined) q.set('month', String(params.month));
     if (params.day !== undefined) q.set('day', String(params.day));
     if (params.type) q.set('type', params.type);
     if (params.search) q.set('search', params.search);
+    if (params.sort) q.set('sort', params.sort);
+    if (params.sortDir) q.set('sortDir', params.sortDir);
     q.set('page', String(params.page ?? 1));
     q.set('limit', String(params.limit ?? 100));
     return request<{ rows: FileRecord[]; total: number; page: number; limit: number }>('GET', `/library?${q}`);

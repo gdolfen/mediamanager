@@ -215,6 +215,8 @@ export interface RunRecord {
   status: 'running' | 'completed' | 'aborted' | 'stopped';
   startedAt: string;
   finishedAt: string | null;
+  totalDirs: number;
+  totalFiles: number;
   scanned: number;
   transferred: number;
   indexed: number;

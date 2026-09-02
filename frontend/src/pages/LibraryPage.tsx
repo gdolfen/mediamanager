@@ -7,6 +7,7 @@ import {
   Card,
   CardActionArea,
   CardContent,
+  CircularProgress,
   FormControl,
   Grid,
   InputLabel,
@@ -19,7 +20,7 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '../api/client';
-import { MediaGrid } from '../components/MediaGrid';
+import { MediaGrid, type SortKey, type SortDir } from '../components/MediaGrid';
 import type { FileRecord, LibraryGroup } from '../types';
 
 const MONTH_NAMES = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
@@ -37,26 +38,35 @@ export function LibraryPage({ onOpenImage, onOpenDevice }: {
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [filesTotal, setFilesTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [sortKey, setSortKey] = useState<SortKey>('takenAt');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadGroups = useCallback(async () => {
     try {
+      setLoading(true);
       setGroups(await api.libraryGroups());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
   const loadFiles = useCallback(async () => {
     try {
-      const res = await api.libraryFiles({ year: year ?? undefined, month: month ?? undefined, day: day ?? undefined, type: type || undefined, search: search || undefined, page, limit: 120 });
+      setLoading(true);
+      const res = await api.libraryFiles({ year: year ?? undefined, month: month ?? undefined, day: day ?? undefined, type: type || undefined, search: search || undefined, sort: sortKey, sortDir, page, limit: 120 });
       setFiles(res.rows);
       setFilesTotal(res.total);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
-  }, [year, month, day, type, search, page]);
+  }, [year, month, day, type, search, page, sortKey, sortDir]);
 
   useEffect(() => { loadGroups(); }, [loadGroups]);
   useEffect(() => { loadFiles(); }, [loadFiles]);
@@ -79,6 +89,8 @@ export function LibraryPage({ onOpenImage, onOpenDevice }: {
       </Grid>
 
       {error && <Grid item xs={12}><Alert severity="error" onClose={() => setError(null)}>{error}</Alert></Grid>}
+
+      {loading && <Grid item xs={12}><Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box></Grid>}
 
       <Grid item xs={12}>
         <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -108,7 +120,7 @@ export function LibraryPage({ onOpenImage, onOpenDevice }: {
         <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>
           {year === null ? 'Alle Medien' : month === null ? `Jahr ${year}` : day === null ? `${MONTH_NAMES[month - 1]} ${year}` : `${day}. ${MONTH_NAMES[month - 1]} ${year}`}
         </Typography>
-        <MediaGrid files={files} total={filesTotal} page={page} onPage={setPage} onOpenImage={onOpenImage} onOpenDevice={onOpenDevice} />
+        <MediaGrid files={files} total={filesTotal} page={page} onPage={setPage} onOpenImage={onOpenImage} onOpenDevice={onOpenDevice} sortKey={sortKey} sortDir={sortDir} onSortChange={(k, d) => { setSortKey(k); setSortDir(d); setPage(1); }} />
       </Grid>
     </Grid>
   );

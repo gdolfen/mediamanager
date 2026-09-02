@@ -67,7 +67,7 @@ export function startRecheck(opts?: { resume?: boolean }): { ok: boolean; error?
   if (!tryAcquire('recheck')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
   abortRequested = false;
   const run = startRun('recheck');
-  const resume = Boolean(opts?.resume && getScanProgress('recheck')?.status === 'running');
+  const resume = Boolean(opts?.resume && ['running', 'aborted', 'stopped'].includes(getScanProgress('recheck')?.status ?? ''));
   if (resume) {
     const p = getScanProgress('recheck')!;
     state.status = 'running';

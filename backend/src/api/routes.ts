@@ -31,6 +31,7 @@ import {
   listUnknownDeviceCandidates,
   toggleIgnoreFile,
   toggleIgnoreFolder,
+  deleteRun,
   listUploadHierarchy,
   resolveProblem,
   resolveProblemsForFile,
@@ -308,7 +309,9 @@ api.get('/files', (req, res) => {
   const deviceNull = req.query.deviceId === 'null';
   const person = typeof req.query.person === 'string' && req.query.person !== 'null' ? req.query.person : undefined;
   const personNull = req.query.person === 'null';
-  const { rows, total } = listFiles({ status, root, sourceRoot, type, search, includeIgnored: req.query.includeIgnored === '1', year, yearNull, deviceKey, deviceId, deviceNull, person, personNull, limit, offset: (page - 1) * limit });
+  const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
+  const sortDir = req.query.sortDir === 'asc' ? 'asc' as const : 'desc' as const;
+  const { rows, total } = listFiles({ status, root, sourceRoot, type, search, includeIgnored: req.query.includeIgnored === '1', year, yearNull, deviceKey, deviceId, deviceNull, person, personNull, sort, sortDir, limit, offset: (page - 1) * limit });
   res.json({ rows, total, page, limit });
 });
 
@@ -508,6 +511,11 @@ api.get('/runs', (_req, res) => {
   res.json(listRuns());
 });
 
+api.delete('/runs/:id', (req, res) => {
+  const ok = deleteRun(Number(req.params.id));
+  res.status(ok ? 200 : 404).json({ ok });
+});
+
 /* ---------- upload scan ---------- */
 
 api.post('/scan/upload', asyncRoute(async (req, res) => {
@@ -527,7 +535,7 @@ api.post('/scan/upload/abort', (_req, res) => {
 api.get('/scan/upload/status', (_req, res) => {
   const state = getUploadScanState();
   const progress = getScanProgress('upload');
-  const canResume = state.status === 'aborted' || progress?.status === 'aborted';
+  const canResume = state.status === 'aborted' || state.status === 'stopped' || progress?.status === 'aborted' || progress?.status === 'stopped';
   res.json({ ...state, canResume });
 });
 
@@ -545,7 +553,9 @@ api.get('/library', (req, res) => {
   const day = req.query.day !== undefined ? Number(req.query.day) : undefined;
   const type = typeof req.query.type === 'string' && req.query.type ? req.query.type : undefined;
   const search = typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined;
-  const { rows, total } = listLibraryFiles({ year, month, day, type, search, limit, offset: (page - 1) * limit });
+  const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
+  const sortDir = req.query.sortDir === 'asc' ? 'asc' as const : 'desc' as const;
+  const { rows, total } = listLibraryFiles({ year, month, day, type, search, sort, sortDir, limit, offset: (page - 1) * limit });
   res.json({ rows, total, page, limit });
 });
 
@@ -568,7 +578,7 @@ api.post('/scan/targets/abort', (_req, res) => {
 api.get('/scan/targets/status', (_req, res) => {
   const state = getTargetScanState();
   const progress = getScanProgress('target');
-  const canResume = state.status === 'aborted' || progress?.status === 'aborted';
+  const canResume = state.status === 'aborted' || state.status === 'stopped' || progress?.status === 'aborted' || progress?.status === 'stopped';
   res.json({ ...state, canResume });
 });
 

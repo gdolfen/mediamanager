@@ -7,6 +7,7 @@ import {
   CardContent,
   Chip,
   Grid,
+  IconButton,
   LinearProgress,
   List,
   ListItem,
@@ -25,6 +26,7 @@ import StopIcon from '@mui/icons-material/Stop';
 import SearchIcon from '@mui/icons-material/Search';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ImageIcon from '@mui/icons-material/Image';
+import DeleteIcon from '@mui/icons-material/Delete';
 import { api } from '../api/client';
 import { useEta, formatEta } from '../hooks/useEta';
 import { formatDateTime } from '../utils/date';
@@ -120,6 +122,15 @@ export function ActionsPage() {
   const startUploadScan = () => runAction(api.startUploadScan);
   const startTargetScan = () => runAction(api.startTargetScan);
 
+  const deleteRun = async (r: RunRecord) => {
+    try {
+      await api.deleteRun(r.id);
+      await loadStatus();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
     <Grid container spacing={3}>
       <Grid item xs={12}>
@@ -211,12 +222,14 @@ export function ActionsPage() {
               {uploadScan?.phase === 'analyze' ? (
                 <Typography variant="body2" color="text.secondary">
                   {uploadScan.analyzed.toLocaleString('de-DE')} von {uploadScan.indexed.toLocaleString('de-DE')} analysiert
+                  {uploadScan.errors.length > 0 && <>, <span style={{ color: '#d32f2f' }}>{uploadScan.errors.length} Fehler</span></>}
                 </Typography>
               ) : (
                 <Grid container spacing={2}>
                   <Metric label="Gescannt" value={uploadScan?.scanned ?? 0} />
                   <Metric label="Dateien" value={uploadScan?.totalFiles ?? 0} />
                   <Metric label="Ordner" value={uploadScan?.totalDirs ?? 0} />
+                  {(uploadScan?.errors.length ?? 0) > 0 && <Metric label="Fehler" value={uploadScan!.errors.length} />}
                 </Grid>
               )}
             </Box>
@@ -240,7 +253,7 @@ export function ActionsPage() {
                 Restzeit {formatEta(etaUpload)}
               </Typography>
             )}
-            {uploadScan && uploadScan.errors.length > 0 && <ErrorList errors={uploadScan.errors} title="Fehler im letzten Scan:" />}
+            {uploadScan && uploadScan.errors.length > 0 && <ErrorList errors={uploadScan.errors} title={uploadRunning ? 'Fehler bislang:' : 'Fehler im letzten Scan:'} />}
           </CardContent>
         </Card>
       </Grid>
@@ -290,12 +303,14 @@ export function ActionsPage() {
               {targetScan?.phase === 'analyze' ? (
                 <Typography variant="body2" color="text.secondary">
                   {targetScan.analyzed.toLocaleString('de-DE')} von {targetScan.indexed.toLocaleString('de-DE')} analysiert
+                  {targetScan.errors.length > 0 && <>, <span style={{ color: '#d32f2f' }}>{targetScan.errors.length} Fehler</span></>}
                 </Typography>
               ) : (
                 <Grid container spacing={2}>
                   <Metric label="Gescannt" value={targetScan?.scanned ?? 0} />
                   <Metric label="Dateien" value={targetScan?.totalFiles ?? 0} />
                   <Metric label="Ordner" value={targetScan?.totalDirs ?? 0} />
+                  {(targetScan?.errors.length ?? 0) > 0 && <Metric label="Fehler" value={targetScan!.errors.length} />}
                 </Grid>
               )}
             </Box>
@@ -319,7 +334,7 @@ export function ActionsPage() {
                 Restzeit {formatEta(etaTarget)}
               </Typography>
             )}
-            {targetScan && targetScan.errors.length > 0 && <ErrorList errors={targetScan.errors} title="Fehler im letzten Scan:" />}
+            {targetScan && targetScan.errors.length > 0 && <ErrorList errors={targetScan.errors} title={targetRunning ? 'Fehler bislang:' : 'Fehler im letzten Scan:'} />}
           </CardContent>
         </Card>
       </Grid>
@@ -361,27 +376,33 @@ export function ActionsPage() {
                   <TableCell>Gestartet</TableCell>
                   <TableCell>Beendet</TableCell>
                   <TableCell align="right">Gescannt</TableCell>
-                  <TableCell align="right">Fortschritt</TableCell>
+                  <TableCell align="right">Dateien</TableCell>
+                  <TableCell align="right">Ordner</TableCell>
                   <TableCell align="right">Übersprungen</TableCell>
-                  <TableCell align="right">Probleme</TableCell>
+                  <TableCell></TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {runs.map((r) => (
-                  <TableRow key={r.id}>
+                  <TableRow key={r.id} hover>
                     <TableCell>{r.id}</TableCell>
                     <TableCell>{KIND_LABEL[r.kind] ?? r.kind}</TableCell>
                     <TableCell><Chip size="small" label={STATUS_LABEL[r.status]} color={r.status === 'completed' ? 'success' : r.status === 'aborted' ? 'error' : 'default'} /></TableCell>
                     <TableCell>{formatDateTime(r.startedAt)}</TableCell>
                     <TableCell>{r.finishedAt ? formatDateTime(r.finishedAt) : '–'}</TableCell>
                     <TableCell align="right">{r.scanned.toLocaleString('de-DE')}</TableCell>
-                    <TableCell align="right">{progressLabel(r)}</TableCell>
+                    <TableCell align="right">{r.totalFiles.toLocaleString('de-DE')}</TableCell>
+                    <TableCell align="right">{r.totalDirs.toLocaleString('de-DE')}</TableCell>
                     <TableCell align="right">{r.skipped.toLocaleString('de-DE')}</TableCell>
-                    <TableCell align="right">{r.problems.toLocaleString('de-DE')}</TableCell>
+                    <TableCell>
+                      <IconButton size="small" title="Lauf löschen" color="error" onClick={() => deleteRun(r)}>
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {runs.length === 0 && (
-                  <TableRow><TableCell colSpan={9} align="center">Noch keine Läufe.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={10} align="center">Noch keine Läufe.</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>
@@ -397,15 +418,6 @@ function thumbProgress(t: ThumbnailStatus | null): number {
   return Math.round(((t.total - t.pending) / t.total) * 100);
 }
 
-function progressLabel(r: RunRecord): string {
-  switch (r.kind) {
-    case 'transfer': return `${r.transferred.toLocaleString('de-DE')} übertragen`;
-    case 'uploadScan': return `${r.indexed.toLocaleString('de-DE')} indexiert`;
-    case 'targetScan': return `${r.transferred.toLocaleString('de-DE')} verknüpft${r.newFiles > 0 ? ` · ${r.newFiles.toLocaleString('de-DE')} neu` : ''}`;
-    case 'recheck': return `${r.transferred.toLocaleString('de-DE')} gelöst${r.newFiles > 0 ? ` · ${r.newFiles.toLocaleString('de-DE')} neu` : ''}`;
-  }
-}
-
 function Metric({ label, value }: { label: string; value: number }) {
   return (
     <Grid item xs={6} sm={3}>
@@ -419,7 +431,7 @@ function ErrorList({ errors, title }: { errors: string[]; title: string }) {
   return (
     <Box sx={{ mt: 2 }}>
       <Typography variant="subtitle2" gutterBottom>{title}</Typography>
-      <List dense sx={{ maxHeight: 140, overflow: 'auto', bgcolor: '#fdecea', borderRadius: 1 }}>
+      <List dense sx={{ maxHeight: 240, overflow: 'auto', bgcolor: '#fdecea', borderRadius: 1 }}>
         {errors.map((e, i) => (
           <ListItem key={i}><ListItemText primary={e} primaryTypographyProps={{ variant: 'body2' }} /></ListItem>
         ))}

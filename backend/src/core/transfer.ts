@@ -98,28 +98,37 @@ export function validatePaths(): { ok: boolean; errors: string[] } {
 export async function startTransfer(): Promise<{ ok: boolean; error?: string; runId?: number }> {
   if (isRunning()) return { ok: false, error: 'Ein Transfer läuft bereits.' };
   if (!tryAcquire('transfer')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
-  const validation = validatePaths();
-  if (!validation.ok) {
-    release('transfer');
-    return { ok: false, error: validation.errors.join('; ') };
+  try {
+    const validation = validatePaths();
+    if (!validation.ok) {
+      return { ok: false, error: validation.errors.join('; ') };
+    }
+    abortRequested = false;
+    const run = startRun();
+    state.runId = run.id;
+    state.status = 'running';
+    state.totalDirs = 0;
+    state.totalFiles = 0;
+    state.scanned = 0;
+    state.transferred = 0;
+    state.skipped = 0;
+    state.problems = 0;
+    state.currentFile = null;
+    state.errors = [];
+    state.startedAt = new Date().toISOString();
+    state.finishedAt = null;
+    logger.info('transfer', 'Transfer gestartet.');
+    void runTransferInternal(run.id);
+    return { ok: true, runId: run.id };
+  } catch (err) {
+    state.status = 'idle';
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('transfer', `Transfer konnte nicht gestartet werden: ${msg}`);
+    return { ok: false, error: msg };
+  } finally {
+    // Lock nur behalten, wenn der Job wirklich läuft – sonst Geister-Sperre.
+    if (state.status !== 'running') release('transfer');
   }
-  abortRequested = false;
-  const run = startRun();
-  state.runId = run.id;
-  state.status = 'running';
-  state.totalDirs = 0;
-  state.totalFiles = 0;
-  state.scanned = 0;
-  state.transferred = 0;
-  state.skipped = 0;
-  state.problems = 0;
-  state.currentFile = null;
-  state.errors = [];
-  state.startedAt = new Date().toISOString();
-  state.finishedAt = null;
-  logger.info('transfer', 'Transfer gestartet.');
-  void runTransferInternal(run.id);
-  return { ok: true, runId: run.id };
 }
 
 function countProblem(isNew: boolean): void {

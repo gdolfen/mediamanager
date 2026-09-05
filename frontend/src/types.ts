@@ -192,6 +192,24 @@ export interface RecheckState {
   finishedAt: string | null;
 }
 
+export interface RescanState {
+  status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
+  runId: number | null;
+  total: number;
+  checked: number;
+  removed: number;
+  currentFile: string | null;
+  errors: string[];
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface RescanInput {
+  fileIds?: number[];
+  upload?: { person?: string; deviceKey?: string; year?: number; yearNull?: boolean; status?: string; type?: string; search?: string };
+  library?: { year?: number; yearNull?: boolean; month?: number; day?: number; status?: string; type?: string; search?: string };
+}
+
 export interface TransferState {
   runId: number | null;
   status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
@@ -207,7 +225,20 @@ export interface TransferState {
   finishedAt: string | null;
 }
 
-export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck';
+export interface TransferredCheckState {
+  status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
+  runId: number | null;
+  total: number;
+  checked: number;
+  transferred: number;
+  undecided: number;
+  currentFile: string | null;
+  errors: string[];
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck' | 'rescan' | 'transferredCheck';
 
 export interface RunRecord {
   id: number;
@@ -246,6 +277,7 @@ export interface Stats {
   devices: number;
   formats: number;
   running: boolean;
+  active: RunKind[];
   paths: Settings['paths'];
   schedule: ScheduleState;
   thumbnailsPending: number;

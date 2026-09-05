@@ -3,11 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { getPaths, setPaths } from '../db/database.js';
+import { getPaths, setPaths, withTransaction, getDb } from '../db/database.js';
 import {
   addDeviceIdentifier,
   assignDeviceToFiles,
+  countDevices,
   countFilesByStatus,
+  countFormats,
   createDevice,
   deleteDevice,
   findDeviceByIdentifier,
@@ -58,16 +60,31 @@ import {
   startRecheck,
 } from '../core/recheck.js';
 import {
+  getRescanState,
+  isRescanRunning,
+  requestRescanAbort,
+  startRescan,
+} from '../core/rescan.js';
+import {
+  getTransferredCheckState,
+  isTransferredCheckRunning,
+  requestTransferredCheckAbort,
+  startTransferredCheck,
+} from '../core/transferredCheck.js';
+import {
   getScheduleState,
   saveScheduleConfig,
 } from '../core/scheduler.js';
 import { resolveDevice, exifIdentifier } from '../core/devices.js';
+import { activeKinds } from '../core/active.js';
 import { parseDateFromFilename, toLocalIso } from '../core/dates.js';
 import { getOrCreateThumbnail, mimeFor, resolveFileAbsolute } from '../media/media.js';
 import { thumbnailQueueStatus } from '../media/thumbnailWorker.js';
 import { problemTypeDef } from '../core/problemCatalog.js';
 import { deviceSchema, settingsSchema, scheduleSchema, identifierKindSchema } from './validation.js';
 import { clearLogs, countLogs, listLogs, logger, type LogLevel } from '../db/logger.js';
+
+type Row = Record<string, unknown>;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -223,11 +240,9 @@ api.post('/devices/adopt', asyncRoute(async (req, res) => {
       res.status(404).json({ error: 'Gerät nicht gefunden' });
       return;
     }
-    const owner = listDevices().find((d) =>
-      d.id !== deviceId && d.identifiers.some((i) => i.kind === identifierKind && i.value.toLowerCase() === identifierValue.toLowerCase()),
-    );
-    if (owner) {
-      res.status(409).json({ error: `Der Indikator gehört bereits zu Gerät "${owner.mappedName}".` });
+    const existingOwner = findDeviceByIdentifier(identifierKind, identifierValue);
+    if (existingOwner && existingOwner.id !== deviceId) {
+      res.status(409).json({ error: `Der Indikator gehört bereits zu Gerät "${existingOwner.mappedName}".` });
       return;
     }
     addDeviceIdentifier(deviceId, identifierKind, identifierValue);
@@ -311,7 +326,8 @@ api.get('/files', (req, res) => {
   const personNull = req.query.person === 'null';
   const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
   const sortDir = req.query.sortDir === 'asc' ? 'asc' as const : 'desc' as const;
-  const { rows, total } = listFiles({ status, root, sourceRoot, type, search, includeIgnored: req.query.includeIgnored === '1', year, yearNull, deviceKey, deviceId, deviceNull, person, personNull, sort, sortDir, limit, offset: (page - 1) * limit });
+  const excludeUnsupported = req.query.excludeUnsupported === '1';
+  const { rows, total } = listFiles({ status, root, sourceRoot, type, search, includeIgnored: req.query.includeIgnored === '1', excludeUnsupported, year, yearNull, deviceKey, deviceId, deviceNull, person, personNull, sort, sortDir, limit, offset: (page - 1) * limit });
   res.json({ rows, total, page, limit });
 });
 
@@ -349,7 +365,10 @@ api.get('/upload/groups', (req, res) => {
   const level = [1, 2, 3].includes(Number(req.query.level)) ? Number(req.query.level) as 1 | 2 | 3 : 1;
   const person = typeof req.query.person === 'string' ? req.query.person : undefined;
   const deviceKey = typeof req.query.deviceKey === 'string' ? req.query.deviceKey : undefined;
-  res.json(listUploadHierarchy(level, { person, deviceKey }));
+  const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+  const type = req.query.type === 'image' || req.query.type === 'video' ? req.query.type : undefined;
+  const search = typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined;
+  res.json(listUploadHierarchy(level, { person, deviceKey, status, type, search }));
 });
 
 /* ---------- problems ---------- */
@@ -395,6 +414,36 @@ api.get('/problems/recheck/status', (_req, res) => {
   res.json(getRecheckState());
 });
 
+/* ---------- rescan (einzelne Dateien / Kachel-Inhalte) ---------- */
+
+api.post('/rescan', (req, res) => {
+  const result = startRescan(req.body ?? {});
+  res.status(result.ok ? 202 : 409).json(result);
+});
+
+api.post('/rescan/abort', (_req, res) => {
+  res.json({ ok: requestRescanAbort() });
+});
+
+api.get('/rescan/status', (_req, res) => {
+  res.json(getRescanState());
+});
+
+/* ---------- transferred check (upload vs. bibliothek, nur DB) ---------- */
+
+api.post('/transferred/check', (_req, res) => {
+  const result = startTransferredCheck();
+  res.status(result.ok ? 202 : 409).json(result);
+});
+
+api.post('/transferred/check/abort', (_req, res) => {
+  res.json({ ok: requestTransferredCheckAbort() });
+});
+
+api.get('/transferred/check/status', (_req, res) => {
+  res.json(getTransferredCheckState());
+});
+
 /** Apply a solution action to a problem. */
 api.post('/problems/:id/resolve', asyncRoute(async (req, res) => {
   const problem = getProblemById(Number(req.params.id));
@@ -414,25 +463,35 @@ api.post('/problems/:id/resolve', asyncRoute(async (req, res) => {
   }
   switch (action.data) {
     case 'accept_file_date': {
-      if (file.sourceMtime) {
-        updateFile(file.id, { overrideDate: toLocalIso(new Date(file.sourceMtime)), overrideSource: 'file' });
+      const mtime = file.sourceMtime;
+      if (mtime) {
+        withTransaction(() => {
+          updateFile(file.id, { overrideDate: toLocalIso(new Date(mtime)), overrideSource: 'file' });
+          resolveProblem(problem.id);
+        });
       }
       break;
     }
     case 'accept_meta_date': {
       const d = file.takenAt ?? (file.sourceMtime ? toLocalIso(new Date(file.sourceMtime)) : null);
-      if (d) updateFile(file.id, { overrideDate: d, overrideSource: file.takenAt ? 'meta' : 'file' });
+      if (d) withTransaction(() => {
+        updateFile(file.id, { overrideDate: d, overrideSource: file.takenAt ? 'meta' : 'file' });
+        resolveProblem(problem.id);
+      });
       break;
     }
     case 'accept_filename_date': {
       const d = parseDateFromFilename(file.originalName);
-      if (d) updateFile(file.id, { overrideDate: toLocalIso(d), overrideSource: 'filename' });
+      if (d) withTransaction(() => {
+        updateFile(file.id, { overrideDate: toLocalIso(d), overrideSource: 'filename' });
+        resolveProblem(problem.id);
+      });
       break;
     }
     case 'ignore':
+      resolveProblem(problem.id);
       break;
   }
-  resolveProblem(problem.id);
   logger.info('problems', `Problem #${problem.id} (${problem.type}) an Datei "${file.originalName}" gelöst via ${action.data}.`);
   res.json({ ok: true });
 }));
@@ -541,21 +600,26 @@ api.get('/scan/upload/status', (_req, res) => {
 
 /* ---------- library ---------- */
 
-api.get('/library/groups', (_req, res) => {
-  res.json(listLibraryGroups());
+api.get('/library/groups', (req, res) => {
+  const status = typeof req.query.status === 'string' && req.query.status ? req.query.status : undefined;
+  const type = req.query.type === 'image' || req.query.type === 'video' ? req.query.type : undefined;
+  const search = typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined;
+  res.json(listLibraryGroups({ status, type, search }));
 });
 
 api.get('/library', (req, res) => {
   const page = Math.max(1, Number(req.query.page ?? 1));
   const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 100)));
-  const year = req.query.year !== undefined ? Number(req.query.year) : undefined;
+  const year = req.query.year !== undefined && req.query.year !== 'null' ? Number(req.query.year) : undefined;
+  const yearNull = req.query.year === 'null';
   const month = req.query.month !== undefined ? Number(req.query.month) : undefined;
   const day = req.query.day !== undefined ? Number(req.query.day) : undefined;
   const type = typeof req.query.type === 'string' && req.query.type ? req.query.type : undefined;
+  const status = typeof req.query.status === 'string' && req.query.status ? req.query.status : undefined;
   const search = typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined;
   const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
   const sortDir = req.query.sortDir === 'asc' ? 'asc' as const : 'desc' as const;
-  const { rows, total } = listLibraryFiles({ year, month, day, type, search, sort, sortDir, limit, offset: (page - 1) * limit });
+  const { rows, total } = listLibraryFiles({ year, yearNull, month, day, type, status, search, sort, sortDir, limit, offset: (page - 1) * limit });
   res.json({ rows, total, page, limit });
 });
 
@@ -594,9 +658,10 @@ api.get('/stats', (_req, res) => {
   res.json({
     counts: countFilesByStatus(),
     openProblems: listProblems({ resolved: false, limit: 1, offset: 0 }).total,
-    devices: listDevices().length,
-    formats: listFormats().length,
-    running: isRunning() || isUploadScanRunning() || isTargetScanRunning() || isRecheckRunning(),
+    devices: countDevices(),
+    formats: countFormats(),
+    running: isRunning() || isUploadScanRunning() || isTargetScanRunning() || isRecheckRunning() || isRescanRunning() || isTransferredCheckRunning(),
+    active: activeKinds(),
     paths: getPaths(),
     schedule: getScheduleState(),
     thumbnailsPending: thumbnailQueueStatus().pending,
@@ -668,3 +733,58 @@ api.get('/media/file/:fileId', asyncRoute(async (req, res) => {
   res.setHeader('Content-Length', stat.size);
   fs.createReadStream(abs).pipe(res);
 }));
+
+/* ---------- dev-tools ---------- */
+
+api.post('/dev/sql', (req, res) => {
+  const { sql } = req.body ?? {};
+  if (typeof sql !== 'string' || !sql.trim()) {
+    res.status(400).json({ error: 'sql erforderlich' });
+    return;
+  }
+  const trimmed = sql.trim().replace(/;\s*$/, '');
+  if (/;\s*\S/.test(trimmed)) {
+    res.status(400).json({ error: 'Nur ein Statement pro Abfrage.' });
+    return;
+  }
+  const isRead = /^\s*(SELECT|PRAGMA|WITH|EXPLAIN)\b/i.test(trimmed);
+  const isWrite = /^\s*(INSERT|UPDATE|DELETE)\b/i.test(trimmed);
+  if (!isRead && !isWrite) {
+    res.status(400).json({ error: 'Nur SELECT, PRAGMA, INSERT, UPDATE und DELETE erlaubt.' });
+    return;
+  }
+  try {
+    if (isWrite) {
+      const info = getDb().prepare(trimmed).run();
+      res.json({
+        rows: [],
+        count: 0,
+        changes: typeof info.changes === 'bigint' ? Number(info.changes) : (info.changes ?? 0),
+        lastInsertRowid: info.lastInsertRowid == null ? null : Number(info.lastInsertRowid),
+      });
+    } else {
+      const rows = getDb().prepare(trimmed).all() as Row[];
+      res.json({ rows, count: rows.length });
+    }
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+api.get('/dev/tables', (_req, res) => {
+  const rows = getDb().prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Row[];
+  res.json(rows.map((r) => r.name as string));
+});
+
+api.get('/dev/table/:name', (req, res) => {
+  const name = req.params.name;
+  const sanitized = name.replace(/[^a-zA-Z0-9_]/g, '');
+  if (!sanitized) { res.status(400).json({ error: 'Ungültiger Tabellenname' }); return; }
+  try {
+    const info = getDb().prepare(`PRAGMA table_info(${sanitized})`).all() as Row[];
+    const count = (getDb().prepare(`SELECT COUNT(*) AS c FROM ${sanitized}`).get() as Row).c as number;
+    res.json({ columns: info.map((r) => ({ name: r.name, type: r.type, notnull: r.notnull === 1, pk: r.pk === 1 })), count });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});

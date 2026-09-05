@@ -1,4 +1,5 @@
 import { nextThumbnailBatch, removeThumbnailFromQueue, thumbnailQueueSize, countMediaFiles } from '../db/daos.js';
+import { log } from '../db/logger.js';
 import { getOrCreateThumbnail, thumbnailExists } from './media.js';
 import { scanPace } from '../core/pace.js';
 
@@ -11,14 +12,29 @@ async function pump(): Promise<void> {
   running = true;
   try {
     for (;;) {
-      const batch = nextThumbnailBatch(CONCURRENCY);
+      let batch: number[];
+      try {
+        batch = nextThumbnailBatch(CONCURRENCY);
+      } catch (err) {
+        // Transienter DB-Fehler (z.B. SQLITE_BUSY) – nächsten Tick erneut versuchen,
+        // statt den Prozess mit einer unbehandelten Rejection zu beenden.
+        log('warn', 'thumbnails', `Queue-Abruf fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`);
+        break;
+      }
       if (batch.length === 0) break;
       await Promise.all(
         batch.map(async (id) => {
           try {
             if (!thumbnailExists(id)) await getOrCreateThumbnail(id);
+          } catch (err) {
+            log('warn', 'thumbnails', `Thumbnail ${id} fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`);
           } finally {
-            removeThumbnailFromQueue(id);
+            try {
+              removeThumbnailFromQueue(id);
+            } catch (err) {
+              // Eintrag bleibt in der Queue und wird beim nächsten Tick erneut versucht.
+              log('warn', 'thumbnails', `Queue-Eintrag ${id} konnte nicht entfernt werden: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
         }),
       );

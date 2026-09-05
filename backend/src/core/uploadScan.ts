@@ -90,59 +90,68 @@ export function requestUploadScanAbort(): boolean {
 export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; error?: string } {
   if (isUploadScanRunning()) return { ok: false, error: 'Ein Upload-Scan läuft bereits.' };
   if (!tryAcquire('uploadScan')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
-  const validation = validatePaths();
-  if (!validation.ok) {
-    release('uploadScan');
-    return { ok: false, error: validation.errors.join('; ') };
-  }
-  abortRequested = false;
-  const resume = Boolean(opts?.resume && ['running', 'aborted', 'stopped'].includes(getScanProgress('upload')?.status ?? ''));
-  if (resume) {
-    const p = getScanProgress('upload')!;
-    const run = p.runId != null ? { id: p.runId } : startRun('uploadScan');
-    state.status = 'running';
-    state.runId = run.id;
-    state.phase = p.current?.startsWith(ANALYZE_MARKER) ? 'analyze' : 'walk';
-    state.totalDirs = p.totalDirs;
-    state.totalFiles = p.totalFiles;
-    state.scanned = p.scanned;
-    state.indexed = p.indexed;
-    state.analyzed = 0;
-    // Im Analyse-Phase die tatsaechliche Anzahl indexierter Datei aus der DB neu zaehlen
-    if (state.phase === 'analyze') {
-      state.indexed = indexedCount('upload');
+  try {
+    const validation = validatePaths();
+    if (!validation.ok) {
+      return { ok: false, error: validation.errors.join('; ') };
     }
-    state.skipped = p.skipped;
-    state.problems = p.problems;
-    state.currentFile = null;
-    state.currentDirs = [];
-    state.errors = [];
-    state.startedAt = p.startedAt;
-    state.finishedAt = null;
-    logger.info('scan', `Upload-Scan wird fortgesetzt (Phase: ${state.phase}, ${p.scanned} gescannt, ${p.indexed} indexiert, ${p.skipped} übersprungen).`);
-  } else {
-    resetScanQueue('upload');
-    const run = startRun('uploadScan');
-    saveScanProgress('upload', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, indexed: 0, skipped: 0, problems: 0, current: null, runId: run.id });
-    state.status = 'running';
-    state.runId = run.id;
-    state.phase = 'walk';
-    state.totalDirs = 0;
-    state.totalFiles = 0;
-    state.scanned = 0;
-    state.indexed = 0;
-    state.analyzed = 0;
-    state.skipped = 0;
-    state.problems = 0;
-    state.currentFile = null;
-    state.currentDirs = [];
-    state.errors = [];
-    state.startedAt = new Date().toISOString();
-    state.finishedAt = null;
-    logger.info('scan', 'Upload-Scan gestartet.');
+    abortRequested = false;
+    const resume = Boolean(opts?.resume && ['running', 'aborted', 'stopped'].includes(getScanProgress('upload')?.status ?? ''));
+    if (resume) {
+      const p = getScanProgress('upload')!;
+      const run = p.runId != null ? { id: p.runId } : startRun('uploadScan');
+      state.status = 'running';
+      state.runId = run.id;
+      state.phase = p.current?.startsWith(ANALYZE_MARKER) ? 'analyze' : 'walk';
+      state.totalDirs = p.totalDirs;
+      state.totalFiles = p.totalFiles;
+      state.scanned = p.scanned;
+      state.indexed = p.indexed;
+      state.analyzed = 0;
+      // Im Analyse-Phase die tatsaechliche Anzahl indexierter Datei aus der DB neu zaehlen
+      if (state.phase === 'analyze') {
+        state.indexed = indexedCount('upload');
+      }
+      state.skipped = p.skipped;
+      state.problems = p.problems;
+      state.currentFile = null;
+      state.currentDirs = [];
+      state.errors = [];
+      state.startedAt = p.startedAt;
+      state.finishedAt = null;
+      logger.info('scan', `Upload-Scan wird fortgesetzt (Phase: ${state.phase}, ${p.scanned} gescannt, ${p.indexed} indexiert, ${p.skipped} übersprungen).`);
+    } else {
+      resetScanQueue('upload');
+      const run = startRun('uploadScan');
+      saveScanProgress('upload', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, indexed: 0, skipped: 0, problems: 0, current: null, runId: run.id });
+      state.status = 'running';
+      state.runId = run.id;
+      state.phase = 'walk';
+      state.totalDirs = 0;
+      state.totalFiles = 0;
+      state.scanned = 0;
+      state.indexed = 0;
+      state.analyzed = 0;
+      state.skipped = 0;
+      state.problems = 0;
+      state.currentFile = null;
+      state.currentDirs = [];
+      state.errors = [];
+      state.startedAt = new Date().toISOString();
+      state.finishedAt = null;
+      logger.info('scan', 'Upload-Scan gestartet.');
+    }
+    void runUploadScanInternal(resume);
+    return { ok: true };
+  } catch (err) {
+    state.status = 'idle';
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('scan', `Upload-Scan konnte nicht gestartet werden: ${msg}`);
+    return { ok: false, error: msg };
+  } finally {
+    // Lock nur behalten, wenn der Job wirklich läuft – sonst Geister-Sperre.
+    if (state.status !== 'running') release('uploadScan');
   }
-  void runUploadScanInternal(resume);
-  return { ok: true };
 }
 
 function persistUploadProgress(current: string | null): void {
@@ -299,7 +308,10 @@ async function runUploadScanInternal(resume: boolean): Promise<void> {
   try {
     // Phase 1: Walk (if not already done)
     if (state.phase === 'walk') {
+      const t0 = Date.now();
       const walkOk = await runWalkPhase(uploadBase, resume);
+      const walkMs = Date.now() - t0;
+      logger.info('scan', `[TRACE] Walk-Phase: ${walkMs}ms, ${state.totalDirs} Ordner, ${state.totalFiles} Dateien, ${state.scanned} gescannt`);
       if (!walkOk || abortRequested) {
         if (state.status !== 'stopped') state.status = 'aborted';
         finishUploadScan(resultDirs, resultFiles);
@@ -316,7 +328,11 @@ async function runUploadScanInternal(resume: boolean): Promise<void> {
     }
 
     // Phase 2: Analyze
+    const t1 = Date.now();
     await runAnalyzePhase();
+    const analyzeMs = Date.now() - t1;
+    const rate = state.analyzed > 0 ? Math.round(state.analyzed / (analyzeMs / 1000)) : 0;
+    logger.info('scan', `[TRACE] Analyse-Phase: ${analyzeMs}ms, ${state.analyzed} Dateien analysiert, ${rate} Dateien/s`);
 
     if (abortRequested && state.status !== 'stopped') state.status = 'aborted';
     else if (state.status !== 'stopped') state.status = 'completed';

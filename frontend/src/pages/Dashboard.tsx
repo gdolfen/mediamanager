@@ -1,27 +1,25 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Card, CardContent, Grid, LinearProgress, Typography } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { api } from '../api/client';
+import { usePolling } from '../hooks/usePolling';
 import type { Stats } from '../types';
 
 export function Dashboard({ onStartTransfer, onNavigate }: { onStartTransfer: () => Promise<boolean>; onNavigate: (p: 'actions' | 'problems') => void }) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       setStats(await api.stats());
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  };
-
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 10000);
-    return () => clearInterval(t);
   }, []);
+
+  useEffect(() => { load(); }, [load]);
+  usePolling(load, 10000, true);
 
   return (
     <Grid container spacing={3}>

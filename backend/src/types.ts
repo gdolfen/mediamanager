@@ -78,7 +78,7 @@ export interface Problem {
   createdAt: string;
 }
 
-export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck';
+export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck' | 'rescan' | 'transferredCheck';
 
 export interface TransferRun {
   id: number;

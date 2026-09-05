@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Box,
@@ -25,6 +25,7 @@ import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { api } from '../api/client';
+import { usePolling } from '../hooks/usePolling';
 import { formatDateTime } from '../utils/date';
 import type { LogEntry, LogLevel, LogPage, LogStats } from '../types';
 
@@ -53,9 +54,8 @@ export function LogsPage() {
   const [stats, setStats] = useState<LogStats | null>(null);
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const [logs, s] = await Promise.all([api.logs({ page, limit, level: level || undefined }), api.logStats()]);
       setData(logs);
@@ -64,21 +64,10 @@ export function LogsPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  };
+  }, [page, level, limit]);
 
-  useEffect(() => {
-    load();
-  }, [page, level]);
-
-  useEffect(() => {
-    if (!paused && !pollRef.current) {
-      pollRef.current = setInterval(() => { load(); }, 3000);
-    } else if (paused && pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [paused, page, level]);
+  useEffect(() => { load(); }, [load]);
+  usePolling(load, 3000, !paused);
 
   const clear = async () => {
     try {

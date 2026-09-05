@@ -19,8 +19,9 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import ArticleIcon from '@mui/icons-material/Article';
 import UploadIcon from '@mui/icons-material/Upload';
+import DeveloperModeIcon from '@mui/icons-material/DeveloperMode';
 
-export type PageKey = 'dashboard' | 'upload' | 'actions' | 'problems' | 'devices' | 'settings' | 'library' | 'logs';
+export type PageKey = 'dashboard' | 'upload' | 'actions' | 'problems' | 'devices' | 'settings' | 'library' | 'logs' | 'devtools';
 
 const NAV: { key: PageKey; label: string; icon: React.ReactNode }[] = [
   { key: 'dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
@@ -31,6 +32,7 @@ const NAV: { key: PageKey; label: string; icon: React.ReactNode }[] = [
   { key: 'devices', label: 'Geräte', icon: <DevicesIcon /> },
   { key: 'settings', label: 'Einstellungen', icon: <SettingsIcon /> },
   { key: 'logs', label: 'Logs', icon: <ArticleIcon /> },
+  { key: 'devtools', label: 'Entwickler', icon: <DeveloperModeIcon /> },
 ];
 
 export function Layout({ page, onNavigate, children }: {

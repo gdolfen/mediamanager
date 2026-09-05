@@ -21,6 +21,7 @@ import {
   TableSortLabel,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import GridViewIcon from '@mui/icons-material/GridView';
@@ -98,14 +99,24 @@ function problemBadge(f: FileRecord): React.ReactNode {
   return <InfoOutlinedIcon fontSize="small" sx={{ color: 'info.main' }} />;
 }
 
-function MediaTile({ file, size, onClick, onOpenDevice, onMouseEnter, onMouseLeave }: {
+function MediaTile({ file, size, onClick, onOpenDevice, onMouseEnter, onMouseLeave, renderAction, onOpenInfo }: {
   file: FileRecord;
   size: number;
   onClick: () => void;
   onOpenDevice?: (deviceId: number) => void;
   onMouseEnter?: (e: React.MouseEvent<HTMLDivElement>) => void;
   onMouseLeave?: () => void;
+  renderAction?: (file: FileRecord) => React.ReactNode;
+  onOpenInfo?: (file: FileRecord, anchor: HTMLElement) => void;
 }) {
+  const indicators = (
+    <>
+      {file.status === 'transferred' && <CheckCircleIcon fontSize="small" sx={{ color: 'success.main', opacity: 0.8 }} />}
+      {file.status === 'indexed' && <SearchIcon fontSize="small" sx={{ color: 'info.main', opacity: 0.8 }} />}
+      {file.status === 'pending' && <ScheduleIcon fontSize="small" sx={{ color: 'warning.main', opacity: 0.8 }} />}
+      {problemBadge(file)}
+    </>
+  );
   return (
     <Paper
       elevation={1}
@@ -117,10 +128,12 @@ function MediaTile({ file, size, onClick, onOpenDevice, onMouseEnter, onMouseLea
       <Box sx={{ position: 'relative' }}>
         <Thumbnail fileId={file.id} fileType={file.fileType} size={size} noDialog />
         <Box sx={{ position: 'absolute', top: 4, right: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.25 }}>
-          {file.status === 'transferred' && <CheckCircleIcon fontSize="small" sx={{ color: 'success.main', opacity: 0.8 }} />}
-          {file.status === 'indexed' && <SearchIcon fontSize="small" sx={{ color: 'info.main', opacity: 0.8 }} />}
-          {file.status === 'pending' && <ScheduleIcon fontSize="small" sx={{ color: 'warning.main', opacity: 0.8 }} />}
-          {problemBadge(file)}
+          <Tooltip title="Datei-Informationen">
+            <Box component="span" onClick={(e) => { e.stopPropagation(); onOpenInfo?.(file, e.currentTarget); }} sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.25, cursor: 'pointer' }}>
+              {indicators}
+            </Box>
+          </Tooltip>
+          {renderAction?.(file)}
         </Box>
       </Box>
       <Box sx={{ px: 0.5, pb: 0.5 }}>
@@ -151,7 +164,7 @@ function MediaTile({ file, size, onClick, onOpenDevice, onMouseEnter, onMouseLea
   );
 }
 
-export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDevice, customTile, sortKey = 'takenAt', sortDir = 'desc', onSortChange }: {
+export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDevice, customTile, renderAction, disableHoverPreview, sortKey = 'takenAt', sortDir = 'desc', onSortChange }: {
   files: FileRecord[];
   total?: number;
   page?: number;
@@ -159,6 +172,9 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
   onOpenImage: (id: number) => void;
   onOpenDevice?: (id: number) => void;
   customTile?: (file: FileRecord) => React.ReactNode;
+  renderAction?: (file: FileRecord) => React.ReactNode;
+  /** Kein Info-Popover bei Hover (Details/Aktionen nur per Status-Icon-Klick). */
+  disableHoverPreview?: boolean;
   sortKey?: SortKey;
   sortDir?: SortDir;
   onSortChange?: (key: SortKey, dir: SortDir) => void;
@@ -166,9 +182,11 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [hover, setHover] = useState<{ file: FileRecord; anchor: HTMLElement } | null>(null);
+  const [selected, setSelected] = useState<{ file: FileRecord; anchor: HTMLElement } | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showHover = (file: FileRecord, anchor: HTMLElement) => {
+    if (selected) return;
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     setHover({ file, anchor });
   };
@@ -219,8 +237,10 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
                   size={160}
                   onClick={() => setOpenIndex(i)}
                   onOpenDevice={onOpenDevice}
-                  onMouseEnter={(e) => showHover(f, e.currentTarget)}
-                  onMouseLeave={hideHover}
+                  onMouseEnter={disableHoverPreview ? undefined : (e) => showHover(f, e.currentTarget)}
+                  onMouseLeave={disableHoverPreview ? undefined : hideHover}
+                  renderAction={renderAction}
+                  onOpenInfo={(file, anchor) => setSelected({ file, anchor })}
                 />
               )}
             </Grid>
@@ -250,6 +270,7 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
                   <TableSortLabel active={sortKey === 'status'} direction={sortKey === 'status' ? sortDir : 'asc'} onClick={() => toggleSort('status')}>Status</TableSortLabel>
                 </TableCell>
                 <TableCell>Probleme</TableCell>
+                {renderAction && <TableCell>Aktion</TableCell>}
               </TableRow>
             </TableHead>
             <TableBody>
@@ -294,10 +315,15 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
                       )}
                     </Stack>
                   </TableCell>
+                  {renderAction && (
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      {renderAction(f)}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
               {files.length === 0 && (
-                <TableRow><TableCell colSpan={8}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>Keine Medien gefunden.</Typography></TableCell></TableRow>
+                <TableRow><TableCell colSpan={renderAction ? 9 : 8}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>Keine Medien gefunden.</Typography></TableCell></TableRow>
               )}
             </TableBody>
           </Table>
@@ -313,16 +339,16 @@ export function MediaGallery({ files, total, page, onPage, onOpenImage, onOpenDe
       )}
 
       <Popover
-        open={Boolean(hover)}
-        anchorEl={hover?.anchor}
+        open={Boolean(hover || selected)}
+        anchorEl={hover?.anchor ?? selected?.anchor}
         anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-        onClose={() => setHover(null)}
+        onClose={() => { setHover(null); setSelected(null); }}
         onMouseEnter={() => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }}
         onMouseLeave={hideHover}
         slotProps={{ paper: { sx: { maxHeight: 480, overflow: 'auto' } } }}
       >
-        {hover && <FileInfoCard file={hover.file} />}
+        {(hover ?? selected) && <FileInfoCard file={(hover ?? selected)!.file} />}
       </Popover>
 
       {openIndex != null && files.length > 0 && (

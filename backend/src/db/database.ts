@@ -17,7 +17,10 @@ export const DEFAULT_PATHS: DbPaths = {
 let db: DatabaseSync | null = null;
 
 export function dataDir(): string {
-  return process.env.DATA_DIR ?? path.resolve(process.cwd(), 'data');
+  // trim(): schützt vor trailing Spaces (klassische Batch-Falle: `set DATA_DIR=...data `),
+  // die sonst einen Geister-Ordner wie `data ` mit eigener DB erzeugen würden.
+  const env = process.env.DATA_DIR?.trim();
+  return env ? env : path.resolve(process.cwd(), 'data');
 }
 
 export function thumbnailsDir(): string {
@@ -43,10 +46,24 @@ export function getDb(): DatabaseSync {
   migrateScanProgressCounters(db);
   migrateFilesStatusIndexed(db);
   migrateFilesSourceStatusIndex(db);
+  migrateFilesOriginalNameIndex(db);
   migrateStoppedStatus(db);
   migrateRunTotals(db);
   seedSettings(db);
   return db;
+}
+
+/** Run fn inside a BEGIN/COMMIT transaction. Rolls back on error. */
+export function withTransaction(fn: () => void): void {
+  const d = getDb();
+  d.exec('BEGIN');
+  try {
+    fn();
+    d.exec('COMMIT');
+  } catch (err) {
+    d.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 /** Add devices.person to existing databases. */
@@ -166,7 +183,7 @@ function migrateFilesStatusIndexed(d: DatabaseSync): void {
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (source_root, source_rel_path)
   );`);
-  d.exec('INSERT INTO files_new SELECT * FROM files;');
+  d.exec('INSERT INTO files_new SELECT id,hash,source_root,source_rel_path,source_size,source_mtime,file_type,ext,original_name,target_root,target_rel_path,device_id,device_raw,make,model,taken_at,date_source,override_date,override_source,status,transferred_at,created_at,updated_at,is_whatsapp,meta_json,md5 FROM files;');
   d.exec('DROP TABLE files;');
   d.exec('ALTER TABLE files_new RENAME TO files;');
   d.exec('CREATE INDEX IF NOT EXISTS idx_files_hash ON files(hash);');
@@ -180,6 +197,11 @@ function migrateFilesStatusIndexed(d: DatabaseSync): void {
 /** Composite index for nextIndexedFiles queries during analyze phase. */
 function migrateFilesSourceStatusIndex(d: DatabaseSync): void {
   d.exec('CREATE INDEX IF NOT EXISTS idx_files_source_status_id ON files(source_root, status, id);');
+}
+
+/** Index für den Transferred-Check (Dateiname-Lookup in der Bibliothek, case-insensitiv). */
+function migrateFilesOriginalNameIndex(d: DatabaseSync): void {
+  d.exec('CREATE INDEX IF NOT EXISTS idx_files_original_name ON files(original_name COLLATE NOCASE);');
 }
 
 /** Add 'stopped' status for manual UI stops (vs 'aborted' for crashes). */

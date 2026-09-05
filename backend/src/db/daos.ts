@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { getDb, thumbnailsDir } from './database.js';
 import type {
   Device,
@@ -270,6 +271,7 @@ export function listFiles(opts: {
   sourceRoot?: 'upload' | 'fotos' | 'videos';
   type?: 'image' | 'video';
   includeIgnored?: boolean;
+  excludeUnsupported?: boolean;
   year?: number;
   yearNull?: boolean;
   deviceId?: number;
@@ -288,25 +290,29 @@ export function listFiles(opts: {
   if (opts.root) { where.push('f.target_root = ?'); params.push(opts.root); }
   if (opts.sourceRoot) { where.push('f.source_root = ?'); params.push(opts.sourceRoot); }
   if (opts.type) { where.push('f.file_type = ?'); params.push(opts.type); }
+  if (opts.excludeUnsupported) { where.push("f.ext NOT IN (SELECT ext FROM formats WHERE supported = 0)"); }
   if (opts.search) {
     where.push('(f.original_name LIKE ? OR f.source_rel_path LIKE ? OR f.target_rel_path LIKE ? OR COALESCE(d.mapped_name,\'\') LIKE ? OR COALESCE(d.person,\'\') LIKE ?)');
     const like = `%${opts.search}%`;
     params.push(like, like, like, like, like);
   }
   if (opts.year != null) {
-    where.push('f.taken_at IS NOT NULL AND f.taken_at != \'\' AND CAST(substr(f.taken_at,1,4) AS INTEGER) = ?');
-    params.push(opts.year);
+    const y = String(opts.year);
+    where.push(`(
+      (f.taken_at IS NOT NULL AND f.taken_at != '' AND CAST(substr(f.taken_at,1,4) AS INTEGER) = ?)
+      OR ((f.taken_at IS NULL OR f.taken_at = '') AND (f.source_rel_path GLOB ? OR f.source_rel_path GLOB ? OR f.source_rel_path GLOB ?))
+    )`);
+    params.push(opts.year, `*/${y}/*`, `${y}/*`, `*/${y}`);
   } else if (opts.yearNull) {
-    where.push('(f.taken_at IS NULL OR f.taken_at = \'\')');
+    where.push(`(f.taken_at IS NULL OR f.taken_at = '') AND f.source_rel_path NOT GLOB '*/[0-9][0-9][0-9][0-9]/*' AND f.source_rel_path NOT GLOB '[0-9][0-9][0-9][0-9]/*' AND f.source_rel_path NOT GLOB '*/[0-9][0-9][0-9][0-9]'`);
   }
   if (opts.deviceKey) {
-    where.push(`(d.mapped_name = ?
-      OR (f.device_id IS NULL AND SUBSTR(f.source_rel_path, INSTR(f.source_rel_path, '/') + 1, INSTR(SUBSTR(f.source_rel_path, INSTR(f.source_rel_path, '/') + 1), '/') - 1) IN (
-        SELECT DISTINCT SUBSTR(f2.source_rel_path, INSTR(f2.source_rel_path, '/') + 1, INSTR(SUBSTR(f2.source_rel_path, INSTR(f2.source_rel_path, '/') + 1), '/') - 1)
-        FROM files f2 INNER JOIN devices d2 ON d2.id = f2.device_id
-        WHERE d2.mapped_name = ?
-      )))`);
-    params.push(opts.deviceKey, opts.deviceKey);
+    if (opts.deviceKey === 'Sonstige') {
+      where.push('LENGTH(f.source_rel_path) - LENGTH(REPLACE(f.source_rel_path, \'/\', \'\')) <= 1');
+    } else {
+      where.push(`(d.mapped_name = ? OR (f.device_id IS NULL AND SUBSTR(f.source_rel_path, INSTR(f.source_rel_path, '/') + 1, INSTR(SUBSTR(f.source_rel_path, INSTR(f.source_rel_path, '/') + 1), '/') - 1) = ?))`);
+      params.push(opts.deviceKey, opts.deviceKey);
+    }
   } else if (opts.deviceId != null) {
     where.push('f.device_id = ?');
     params.push(opts.deviceId);
@@ -341,6 +347,14 @@ export function countFilesByStatus(): Record<FileStatus, number> {
   return out;
 }
 
+export function countDevices(): number {
+  return (getDb().prepare('SELECT COUNT(*) AS c FROM devices').get() as Row).c as number;
+}
+
+export function countFormats(): number {
+  return formatCache.size;
+}
+
 /** Alle Dateien mit einer bestimmten Dateiendung (Upload + Bibliothek), paginiert. */
 export function listFilesByExt(ext: string, limit = 200, offset = 0): { rows: FileRecord[]; total: number } {
   const total = (getDb().prepare('SELECT COUNT(*) AS c FROM files f WHERE f.ext = ? COLLATE NOCASE').get(ext) as Row).c as number;
@@ -355,6 +369,11 @@ export function listFilesByExt(ext: string, limit = 200, offset = 0): { rows: Fi
 /* ---------- thumbnail queue ---------- */
 
 export function enqueueThumbnail(fileId: number): void {
+  // Nur einreihen, wenn das Thumbnail wirklich noch fehlt – sonst würde jeder
+  // Scan die Queue mit bereits vorhandenen Thumbnails fluten.
+  try {
+    if (fs.existsSync(path.join(thumbnailsDir(), `${fileId}.jpg`))) return;
+  } catch { /* ignore – im Zweifel einreihen */ }
   getDb().prepare('INSERT OR IGNORE INTO thumbnail_queue (file_id) VALUES (?)').run(fileId);
 }
 
@@ -794,28 +813,26 @@ export function assignDeviceToFiles(deviceId: number, deviceRaw: string, fileIds
  *  EXIF matches pending uploads AND library files (target folders).
  *  Path matches pending upload files with a nested folder. */
 export function findFileIdsByIdentifier(kind: DeviceIdentifier['kind'], identifierValue: string): number[] {
-  const rows = getDb().prepare(`
-    SELECT id, make, model, source_rel_path, source_root FROM files
-    WHERE device_id IS NULL
+  if (kind === 'exif') {
+    const norm = identifierValue.replace(/\s+/g, ' ').trim().toLowerCase();
+    const sql = `SELECT id FROM files WHERE device_id IS NULL
+      AND make IS NOT NULL AND model IS NOT NULL
       AND ((source_root = 'upload' AND status IN ('indexed','pending')) OR source_root IN ('fotos','videos'))
+      AND LOWER(REPLACE(make || ' ' || model, '  ', ' ')) = ?`;
+    return (getDb().prepare(sql).all(norm) as Row[]).map((r) => r.id as number);
+  }
+  const needle = identifierValue.replace(/\/+$/, '');
+  const rows = getDb().prepare(`
+    SELECT id, source_rel_path FROM files
+    WHERE device_id IS NULL AND source_root = 'upload' AND status IN ('indexed','pending')
+      AND instr(source_rel_path, '/') > 0
   `).all() as Row[];
   return rows
     .filter((r) => {
-      if (kind === 'exif') {
-        if (!r.make || !r.model) return false;
-        return `${r.make as string} ${r.model as string}`.replace(/\s+/g, ' ').trim().toLowerCase() === identifierValue.toLowerCase();
-      }
-      if (kind === 'path') {
-        if (r.source_root !== 'upload') return false;
-        const parts = (r.source_rel_path as string).split('/').filter(Boolean);
-        if (parts.length < 2) return false;
-        // Gleiche Semantik wie resolveByPath: auch Dateien in Unterordnern
-        // (z.B. "Daniela/Galaxy A14/Internal storage/DCIM/Camera/…") zuordnen.
-        const dir = parts.slice(0, -1).join('/');
-        const needle = identifierValue.replace(/\/+$/, '');
-        return dir === needle || dir.startsWith(`${needle}/`);
-      }
-      return false;
+      const parts = (r.source_rel_path as string).split('/').filter(Boolean);
+      if (parts.length < 2) return false;
+      const dir = parts.slice(0, -1).join('/');
+      return dir === needle || dir.startsWith(`${needle}/`);
     })
     .map((r) => r.id as number);
 }
@@ -961,6 +978,64 @@ export function deleteRun(id: number): boolean {
   return Number(result.changes) > 0;
 }
 
+/**
+ * Löscht einen Datei-Datensatz. Zugehörige Probleme und Thumbnail-Queue-Einträge
+ * werden automatisch entfernt (ON DELETE CASCADE). Das Thumbnail auf der Platte
+ * muss der Aufrufer separat löschen.
+ */
+export function deleteFileRecord(id: number): boolean {
+  const result = getDb().prepare('DELETE FROM files WHERE id = ?').run(id);
+  return Number(result.changes) > 0;
+}
+
+/* ---------- transferred check ---------- */
+
+export interface TransferredCandidate {
+  id: number;
+  sourceRelPath: string;
+  originalName: string;
+  md5: string | null;
+  status: FileStatus;
+}
+
+/** Alle noch nicht übertragenen Upload-Dateien (schlanke Zeilen für den Transferred-Check). */
+export function listUploadForTransferredCheck(): TransferredCandidate[] {
+  const rows = getDb().prepare(
+    `SELECT id, source_rel_path, original_name, md5, status FROM files WHERE source_root = 'upload' AND status IN ('pending','indexed') ORDER BY id`
+  ).all() as Row[];
+  return rows.map((r) => ({
+    id: r.id as number,
+    sourceRelPath: r.source_rel_path as string,
+    originalName: r.original_name as string,
+    md5: (r.md5 as string) ?? null,
+    status: r.status as FileStatus,
+  }));
+}
+
+export interface LibraryNameMatch {
+  id: number;
+  sourceRoot: string;
+  sourceRelPath: string;
+  md5: string | null;
+  targetRoot: string | null;
+  targetRelPath: string | null;
+}
+
+/** Bibliotheks-Dateien mit gleichem Dateinamen (case-insensitiv, nutzt idx_files_original_name). */
+export function findLibraryByOriginalName(name: string): LibraryNameMatch[] {
+  const rows = getDb().prepare(
+    `SELECT id, source_root, source_rel_path, md5, target_root, target_rel_path FROM files WHERE source_root IN ('fotos','videos') AND original_name = ? COLLATE NOCASE`
+  ).all(name) as Row[];
+  return rows.map((r) => ({
+    id: r.id as number,
+    sourceRoot: r.source_root as string,
+    sourceRelPath: r.source_rel_path as string,
+    md5: (r.md5 as string) ?? null,
+    targetRoot: (r.target_root as string) ?? null,
+    targetRelPath: (r.target_rel_path as string) ?? null,
+  }));
+}
+
 export function countMediaFiles(): number {
   const row = getDb().prepare("SELECT COUNT(*) AS n FROM files WHERE file_type IN ('image','video')").get() as Row;
   return Number(row.n);
@@ -977,7 +1052,17 @@ export interface LibraryGroup {
   videos: number;
 }
 
-export function listLibraryGroups(): LibraryGroup[] {
+export function listLibraryGroups(opts: { status?: string; type?: string; search?: string } = {}): LibraryGroup[] {
+  const where = [`source_root IN ('fotos','videos')`, `taken_at IS NOT NULL`];
+  const params: Array<string | number> = [];
+  if (opts.status) { where.push('status = ?'); params.push(opts.status); }
+  if (opts.type === 'image' || opts.type === 'video') { where.push('file_type = ?'); params.push(opts.type); }
+  if (opts.search) {
+    where.push('(original_name LIKE ? OR source_rel_path LIKE ?)');
+    const like = `%${opts.search}%`;
+    params.push(like, like);
+  }
+  const whereSql = `WHERE ${where.join(' AND ')}`;
   const rows = getDb().prepare(`
     SELECT CAST(substr(taken_at,1,4) AS INTEGER) AS year,
            CAST(substr(taken_at,6,2) AS INTEGER) AS month,
@@ -986,11 +1071,11 @@ export function listLibraryGroups(): LibraryGroup[] {
            SUM(CASE WHEN file_type = 'image' THEN 1 ELSE 0 END) AS images,
            SUM(CASE WHEN file_type = 'video' THEN 1 ELSE 0 END) AS videos
     FROM files
-    WHERE source_root IN ('fotos','videos') AND taken_at IS NOT NULL
+    ${whereSql}
     GROUP BY year, month, day
     ORDER BY year DESC, month DESC, day DESC
-  `).all() as Row[];
-  return rows.map((r) => ({
+  `).all(...params) as Row[];
+  const groups = rows.map((r) => ({
     year: r.year as number,
     month: r.month as number,
     day: r.day as number,
@@ -998,13 +1083,43 @@ export function listLibraryGroups(): LibraryGroup[] {
     images: (r.images as number) ?? 0,
     videos: (r.videos as number) ?? 0,
   }));
+  // Dateien ohne Datumszuordnung als "Sonstige"-Gruppe (year/month/day = 0).
+  const noYearWhere = [`source_root IN ('fotos','videos')`, `(taken_at IS NULL OR taken_at = '')`];
+  const noYearParams: Array<string | number> = [];
+  if (opts.status) { noYearWhere.push('status = ?'); noYearParams.push(opts.status); }
+  if (opts.type === 'image' || opts.type === 'video') { noYearWhere.push('file_type = ?'); noYearParams.push(opts.type); }
+  if (opts.search) {
+    noYearWhere.push('(original_name LIKE ? OR source_rel_path LIKE ?)');
+    const like = `%${opts.search}%`;
+    noYearParams.push(like, like);
+  }
+  const noYear = getDb().prepare(`
+    SELECT COUNT(*) AS count,
+           SUM(CASE WHEN file_type = 'image' THEN 1 ELSE 0 END) AS images,
+           SUM(CASE WHEN file_type = 'video' THEN 1 ELSE 0 END) AS videos
+    FROM files
+    WHERE ${noYearWhere.join(' AND ')}
+  `).get(...noYearParams) as Row;
+  if ((noYear.count as number) > 0) {
+    groups.push({
+      year: 0,
+      month: 0,
+      day: 0,
+      count: noYear.count as number,
+      images: (noYear.images as number) ?? 0,
+      videos: (noYear.videos as number) ?? 0,
+    });
+  }
+  return groups;
 }
 
 export function listLibraryFiles(opts: {
   year?: number;
+  yearNull?: boolean;
   month?: number;
   day?: number;
   type?: string;
+  status?: string;
   search?: string;
   sort?: string;
   sortDir?: 'asc' | 'desc';
@@ -1016,6 +1131,8 @@ export function listLibraryFiles(opts: {
   if (opts.year !== undefined) {
     where.push('CAST(substr(f.taken_at,1,4) AS INTEGER) = ?');
     params.push(opts.year);
+  } else if (opts.yearNull) {
+    where.push("(f.taken_at IS NULL OR f.taken_at = '')");
   }
   if (opts.month !== undefined) {
     where.push('CAST(substr(f.taken_at,6,2) AS INTEGER) = ?');
@@ -1028,6 +1145,10 @@ export function listLibraryFiles(opts: {
   if (opts.type) {
     where.push('f.file_type = ?');
     params.push(opts.type);
+  }
+  if (opts.status) {
+    where.push('f.status = ?');
+    params.push(opts.status);
   }
   if (opts.search) {
     where.push('(f.original_name LIKE ? OR f.source_rel_path LIKE ? OR COALESCE(d.mapped_name,\'\') LIKE ?)');
@@ -1201,7 +1322,7 @@ function resolvePath(f: Row, level: 1 | 2 | 3): string {
   return parts[0] + '/' + resolveDeviceName(f) + '/' + resolveYear(f);
 }
 
-export function listUploadHierarchy(level: 1 | 2 | 3, filters: { person?: string; deviceKey?: string } = {}): UploadGroup[] {
+export function listUploadHierarchy(level: 1 | 2 | 3, filters: { person?: string; deviceKey?: string; status?: string; type?: string; search?: string } = {}): UploadGroup[] {
   const db = getDb();
   const ignoredFiles = db.prepare('SELECT path FROM ignored WHERE scope = \'file\'').all() as Row[];
   const ignoredFolders = db.prepare('SELECT path FROM ignored WHERE scope = \'folder\'').all() as Row[];
@@ -1221,12 +1342,23 @@ export function listUploadHierarchy(level: 1 | 2 | 3, filters: { person?: string
   const params: Array<string | number> = [];
   if (filters.person) { where.push("SUBSTR(f.source_rel_path, 1, INSTR(f.source_rel_path, '/') - 1) = ?"); params.push(filters.person); }
   if (filters.deviceKey) {
-    where.push(`(COALESCE(d.mapped_name, SUBSTR(f.source_rel_path, INSTR(f.source_rel_path, '/') + 1, INSTR(SUBSTR(f.source_rel_path, INSTR(f.source_rel_path, '/') + 1), '/') - 1)) = ?)`);
-    params.push(filters.deviceKey);
+    if (filters.deviceKey === 'Sonstige') {
+      where.push(`(d.mapped_name IS NULL AND LENGTH(f.source_rel_path) - LENGTH(REPLACE(f.source_rel_path, '/', '')) <= 1)`);
+    } else {
+      where.push(`(COALESCE(d.mapped_name, SUBSTR(f.source_rel_path, INSTR(f.source_rel_path, '/') + 1, INSTR(SUBSTR(f.source_rel_path, INSTR(f.source_rel_path, '/') + 1), '/') - 1)) = ?)`);
+      params.push(filters.deviceKey);
+    }
+  }
+  if (filters.status) { where.push('f.status = ?'); params.push(filters.status); }
+  if (filters.type === 'image' || filters.type === 'video') { where.push('f.file_type = ?'); params.push(filters.type); }
+  if (filters.search) {
+    where.push('(f.original_name LIKE ? OR f.source_rel_path LIKE ?)');
+    const like = `%${filters.search}%`;
+    params.push(like, like);
   }
 
   const files = db.prepare(`
-    SELECT f.source_rel_path, f.file_type, f.status, f.taken_at, f.device_id,
+    SELECT f.source_rel_path, f.original_name, f.file_type, f.status, f.taken_at, f.device_id,
            d.mapped_name, d.person
     FROM files f
     LEFT JOIN devices d ON d.id = f.device_id
@@ -1247,14 +1379,15 @@ export function listUploadHierarchy(level: 1 | 2 | 3, filters: { person?: string
     const mapped = f.mapped_name as string | null;
     const path = f.source_rel_path as string;
     const parts = path.split('/');
-    const folderName = parts[1];
     if (mapped) return mapped;
+    if (parts.length <= 2) return 'Sonstige';
+    const folderName = parts[1];
     if (folderName) {
       const fallback = folderDeviceMap.get(parts[0] + '/' + folderName);
       if (fallback) return fallback;
       return folderName;
     }
-    return 'Unbekanntes Gerät';
+    return 'Sonstige';
   }
 
   const groups = new Map<string, { label: string; path: string; count: number; images: number; videos: number; pending: number; transferred: number; indexed: number }>();

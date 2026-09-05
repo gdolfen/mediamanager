@@ -1,11 +1,11 @@
-# Startet den MediaManager-Server IMMER mit der Produktions-Datenbank unter lokal\data
+# Startet den MediaManager-Server IMMER mit der Produktions-Datenbank unter data
 # und den in der DB gespeicherten Zielpfaden (P:\ upload, Y:\ fotos, V:\ videos).
 # PowerShell-Env persistiert NICHT zwischen Aufrufen – nur so bleibt DATA_DIR korrekt.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PidFile = Join-Path $Root 'lokal\server.pid'
-$OutLog = Join-Path $Root 'lokal\server.out.log'
-$ErrLog = Join-Path $Root 'lokal\server.err.log'
+$PidFile = Join-Path $Root 'data\server.pid'
+$OutLog = Join-Path $Root 'data\server.out.log'
+$ErrLog = Join-Path $Root 'data\server.err.log'
 
 if (Test-Path $PidFile) {
   $old = Get-Content $PidFile | Select-Object -First 1
@@ -17,12 +17,12 @@ if (Test-Path $PidFile) {
 }
 
 # Zielpfade aus der DB lesen (werden beim Start nur zum Seed benötigt)
-$DbPath = Join-Path $Root 'lokal\data\mediamanager.db'
+$DbPath = Join-Path $Root 'data\mediamanager.db'
 $settingsJson = node -e "const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1],{readOnly:true});const rows=db.prepare('SELECT key,value FROM settings').all();const o={};for(const r of rows)o[r.key]=r.value;console.log(JSON.stringify(o));" $DbPath
 $settings = $settingsJson | ConvertFrom-Json
 
 $env:PORT = '4000'
-$env:DATA_DIR = Join-Path $Root 'lokal\data'
+$env:DATA_DIR = Join-Path $Root 'data'
 $env:UPLOAD_DIR = $settings.'paths.upload'
 $env:FOTOS_DIR = $settings.'paths.fotos'
 $env:VIDEOS_DIR = $settings.'paths.videos'

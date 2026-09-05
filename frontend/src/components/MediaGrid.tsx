@@ -17,6 +17,8 @@ export function MediaGrid(props: {
   sortKey?: SortKey;
   sortDir?: SortDir;
   onSortChange?: (key: SortKey, dir: SortDir) => void;
+  renderAction?: (file: FileRecord) => React.ReactNode;
+  disableHoverPreview?: boolean;
 }) {
   return <MediaGallery {...props} />;
 }

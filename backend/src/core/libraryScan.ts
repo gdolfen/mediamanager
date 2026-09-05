@@ -107,56 +107,66 @@ export function requestTargetScanAbort(): boolean {
 export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; error?: string } {
   if (isTargetScanRunning()) return { ok: false, error: 'Ein Zielordner-Scan läuft bereits.' };
   if (!tryAcquire('targetScan')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
-  abortRequested = false;
-  const resume = Boolean(opts?.resume && ['running', 'aborted', 'stopped'].includes(getScanProgress('target')?.status ?? ''));
-  if (resume) {
-    const p = getScanProgress('target')!;
-    const run = p.runId != null ? { id: p.runId } : startRun('targetScan');
-    state.status = 'running';
-    state.runId = run.id;
-    state.phase = p.current?.startsWith(ANALYZE_MARKER) ? 'analyze' : 'walk';
-    state.totalDirs = p.totalDirs;
-    state.totalFiles = p.totalFiles;
-    state.scanned = p.scanned;
-    state.indexed = 0;
-    state.analyzed = 0;
-    // Im Analyse-Phase die tatsaechliche Anzahl indexierter Datei aus der DB neu zaehlen
-    if (state.phase === 'analyze') {
-      for (const r of ['fotos', 'videos'] as const) state.indexed += indexedCount(r);
+  try {
+    abortRequested = false;
+    const resume = Boolean(opts?.resume && ['running', 'aborted', 'stopped'].includes(getScanProgress('target')?.status ?? ''));
+    if (resume) {
+      const p = getScanProgress('target')!;
+      const run = p.runId != null ? { id: p.runId } : startRun('targetScan');
+      state.status = 'running';
+      state.runId = run.id;
+      state.phase = p.current?.startsWith(ANALYZE_MARKER) ? 'analyze' : 'walk';
+      state.totalDirs = p.totalDirs;
+      state.totalFiles = p.totalFiles;
+      state.scanned = p.scanned;
+      state.indexed = 0;
+      state.analyzed = 0;
+      // Im Analyse-Phase die tatsaechliche Anzahl indexierter Datei aus der DB neu zaehlen
+      if (state.phase === 'analyze') {
+        for (const r of ['fotos', 'videos'] as const) state.indexed += indexedCount(r);
+      }
+      state.linked = p.linked;
+      state.newFiles = p.newFilesCount;
+      state.problems = p.problems;
+      state.currentFile = null;
+      state.currentDirs = [];
+      state.errors = [];
+      state.startedAt = p.startedAt;
+      state.finishedAt = null;
+      logger.info('scan', `Zielordner-Scan wird fortgesetzt (Phase: ${state.phase}, ${p.scanned} gescannt, ${p.linked} verknüpft, ${p.newFilesCount} neu).`);
+    } else {
+      resetScanQueue('target');
+      const run = startRun('targetScan');
+      saveScanProgress('target', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, linked: 0, newFilesCount: 0, problems: 0, current: null, runId: run.id });
+      state.status = 'running';
+      state.runId = run.id;
+      state.phase = 'walk';
+      state.totalDirs = 0;
+      state.totalFiles = 0;
+      state.scanned = 0;
+      state.indexed = 0;
+      state.analyzed = 0;
+      state.linked = 0;
+      state.newFiles = 0;
+      state.problems = 0;
+      state.currentFile = null;
+      state.currentDirs = [];
+      state.errors = [];
+      state.startedAt = new Date().toISOString();
+      state.finishedAt = null;
+      logger.info('scan', 'Zielordner-Scan gestartet.');
     }
-    state.linked = p.linked;
-    state.newFiles = p.newFilesCount;
-    state.problems = p.problems;
-    state.currentFile = null;
-    state.currentDirs = [];
-    state.errors = [];
-    state.startedAt = p.startedAt;
-    state.finishedAt = null;
-    logger.info('scan', `Zielordner-Scan wird fortgesetzt (Phase: ${state.phase}, ${p.scanned} gescannt, ${p.linked} verknüpft, ${p.newFilesCount} neu).`);
-  } else {
-    resetScanQueue('target');
-    const run = startRun('targetScan');
-    saveScanProgress('target', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, linked: 0, newFilesCount: 0, problems: 0, current: null, runId: run.id });
-    state.status = 'running';
-    state.runId = run.id;
-    state.phase = 'walk';
-    state.totalDirs = 0;
-    state.totalFiles = 0;
-    state.scanned = 0;
-    state.indexed = 0;
-    state.analyzed = 0;
-    state.linked = 0;
-    state.newFiles = 0;
-    state.problems = 0;
-    state.currentFile = null;
-    state.currentDirs = [];
-    state.errors = [];
-    state.startedAt = new Date().toISOString();
-    state.finishedAt = null;
-    logger.info('scan', 'Zielordner-Scan gestartet.');
+    void runTargetScanInternal(resume);
+    return { ok: true };
+  } catch (err) {
+    state.status = 'idle';
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('scan', `Zielordner-Scan konnte nicht gestartet werden: ${msg}`);
+    return { ok: false, error: msg };
+  } finally {
+    // Lock nur behalten, wenn der Job wirklich läuft – sonst Geister-Sperre.
+    if (state.status !== 'running') release('targetScan');
   }
-  void runTargetScanInternal(resume);
-  return { ok: true };
 }
 
 function persistTargetProgress(current: string | null): void {
@@ -468,7 +478,10 @@ async function runTargetScanInternal(resume: boolean): Promise<void> {
   try {
     // Phase 1: Walk (if not already done)
     if (state.phase === 'walk') {
+      const t0 = Date.now();
       const walkOk = await runWalkPhase(roots, resume);
+      const walkMs = Date.now() - t0;
+      logger.info('scan', `[TRACE] Zielordner Walk: ${walkMs}ms, ${state.totalDirs} Ordner, ${state.totalFiles} Dateien, ${state.scanned} gescannt`);
       if (!walkOk || abortRequested) {
         if (state.status !== 'stopped') state.status = 'aborted';
         finishTargetScan();
@@ -487,7 +500,11 @@ async function runTargetScanInternal(resume: boolean): Promise<void> {
     }
 
     // Phase 2: Analyze
+    const t1 = Date.now();
     await runAnalyzePhase(roots);
+    const analyzeMs = Date.now() - t1;
+    const rate = state.analyzed > 0 ? Math.round(state.analyzed / (analyzeMs / 1000)) : 0;
+    logger.info('scan', `[TRACE] Zielordner Analyse: ${analyzeMs}ms, ${state.analyzed} Dateien analysiert, ${rate} Dateien/s`);
 
     if (abortRequested && state.status !== 'stopped') state.status = 'aborted';
     else if (state.status !== 'stopped') state.status = 'completed';

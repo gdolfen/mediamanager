@@ -11,6 +11,20 @@ import type { FileRecord } from '../types.js';
 
 const execFileP = promisify(execFile);
 
+const THUMB_CONCURRENCY = 4;
+let thumbActive = 0;
+const thumbQueue: Array<() => void> = [];
+
+function thumbAcquire(): Promise<void> {
+  if (thumbActive < THUMB_CONCURRENCY) { thumbActive++; return Promise.resolve(); }
+  return new Promise((resolve) => thumbQueue.push(resolve));
+}
+
+function thumbRelease(): void {
+  thumbActive--;
+  if (thumbQueue.length > 0) { thumbActive++; thumbQueue.shift()!(); }
+}
+
 export async function resolveFileAbsolute(f: FileRecord): Promise<string | null> {
   if (f.targetRoot && f.targetRelPath) {
     const p = resolveBase(rootBase(f.targetRoot as 'fotos' | 'videos'), f.targetRelPath);
@@ -32,13 +46,16 @@ export function thumbnailExists(fileId: number): boolean {
 const pending = new Map<number, Promise<string | null>>();
 
 /** Generate (or reuse cached) thumbnail for a file. Returns cache path or null on failure.
- *  Concurrent calls for the same fileId share a single generation. */
+ *  Concurrent calls for the same fileId share a single generation.
+ *  Total concurrent generations are limited to THUMB_CONCURRENCY. */
 export function getOrCreateThumbnail(fileId: number): Promise<string | null> {
   const cache = thumbnailCachePath(fileId);
   if (fs.existsSync(cache)) return Promise.resolve(cache);
   const existing = pending.get(fileId);
   if (existing) return existing;
-  const p = generateThumbnail(fileId, cache).finally(() => pending.delete(fileId));
+  const p = thumbAcquire()
+    .then(() => generateThumbnail(fileId, cache))
+    .finally(() => { thumbRelease(); pending.delete(fileId); });
   pending.set(fileId, p);
   return p;
 }

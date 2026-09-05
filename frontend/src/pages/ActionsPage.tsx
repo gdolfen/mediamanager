@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Box,
@@ -25,12 +25,14 @@ import FastForwardIcon from '@mui/icons-material/FastForward';
 import StopIcon from '@mui/icons-material/Stop';
 import SearchIcon from '@mui/icons-material/Search';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import FileCopyIcon from '@mui/icons-material/FileCopy';
 import ImageIcon from '@mui/icons-material/Image';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { api } from '../api/client';
 import { useEta, formatEta } from '../hooks/useEta';
+import { usePolling } from '../hooks/usePolling';
 import { formatDateTime } from '../utils/date';
-import type { RunKind, RunRecord, TargetScanState, ThumbnailStatus, TransferState, UploadScanState } from '../types';
+import type { TransferredCheckState, RescanState, RunKind, RunRecord, TargetScanState, ThumbnailStatus, TransferState, UploadScanState } from '../types';
 
 const STATUS_LABEL: Record<string, string> = {
   idle: 'Bereit',
@@ -45,38 +47,41 @@ const KIND_LABEL: Record<RunKind, string> = {
   uploadScan: 'Upload-Scan',
   targetScan: 'Zielordner-Scan',
   recheck: 'Neubewertung',
+  rescan: 'Erneuter Scan',
+  transferredCheck: 'Transferred-Check',
 };
 
 export function ActionsPage() {
   const [transfer, setTransfer] = useState<TransferState | null>(null);
   const [uploadScan, setUploadScan] = useState<UploadScanState | null>(null);
   const [targetScan, setTargetScan] = useState<TargetScanState | null>(null);
+  const [rescan, setRescan] = useState<RescanState | null>(null);
+  const [transferredCheck, setDupcheck] = useState<TransferredCheckState | null>(null);
+  const [activeKinds, setActiveKinds] = useState<RunKind[]>([]);
   const [thumbnails, setThumbnails] = useState<ThumbnailStatus | null>(null);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollingRef = useRef(false);
 
   const loadStatus = useCallback(async () => {
-    if (pollingRef.current) return;
-    pollingRef.current = true;
-    try {
-      const [t, u, ta, th, r] = await Promise.allSettled([
-        api.transferStatus(),
-        api.uploadScanStatus(),
-        api.targetScanStatus(),
-        api.thumbnailStatus(),
-        api.runHistory(),
-      ]);
-      if (t.status === 'fulfilled') setTransfer(t.value);
-      if (u.status === 'fulfilled') setUploadScan(u.value);
-      if (ta.status === 'fulfilled') setTargetScan(ta.value);
-      if (th.status === 'fulfilled') setThumbnails(th.value);
-      if (r.status === 'fulfilled') setRuns(r.value);
-    } finally {
-      pollingRef.current = false;
-    }
+    const [t, u, ta, rs, dc, st, th, r] = await Promise.allSettled([
+      api.transferStatus(),
+      api.uploadScanStatus(),
+      api.targetScanStatus(),
+      api.rescanStatus(),
+      api.transferredCheckStatus(),
+      api.stats(),
+      api.thumbnailStatus(),
+      api.runHistory(),
+    ]);
+    if (t.status === 'fulfilled') setTransfer(t.value);
+    if (u.status === 'fulfilled') setUploadScan(u.value);
+    if (ta.status === 'fulfilled') setTargetScan(ta.value);
+    if (rs.status === 'fulfilled') setRescan(rs.value);
+    if (dc.status === 'fulfilled') setDupcheck(dc.value);
+    if (st.status === 'fulfilled') setActiveKinds(st.value.active ?? []);
+    if (th.status === 'fulfilled') setThumbnails(th.value);
+    if (r.status === 'fulfilled') setRuns(r.value);
   }, []);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
@@ -84,8 +89,10 @@ export function ActionsPage() {
   const transferRunning = transfer?.status === 'running';
   const uploadRunning = uploadScan?.status === 'running';
   const targetRunning = targetScan?.status === 'running';
+  const rescanRunning = rescan?.status === 'running';
+  const transferredCheckRunning = transferredCheck?.status === 'running';
   const thumbPending = (thumbnails?.pending ?? 0) > 0;
-  const anythingActive = transferRunning || uploadRunning || targetRunning || thumbPending;
+  const anythingActive = transferRunning || uploadRunning || targetRunning || rescanRunning || transferredCheckRunning || thumbPending;
 
   const etaUpload = useEta(
     uploadScan?.phase === 'analyze' ? (uploadScan?.analyzed ?? 0) : (uploadScan?.scanned ?? 0),
@@ -98,14 +105,7 @@ export function ActionsPage() {
     targetRunning
   );
 
-  useEffect(() => {
-    if (anythingActive && !pollRef.current) {
-      pollRef.current = setInterval(loadStatus, 2000);
-    } else if (!anythingActive && pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  }, [anythingActive, loadStatus]);
+  usePolling(loadStatus, 2000, anythingActive);
 
   const runAction = async (fn: () => Promise<{ ok: boolean; error?: string } | { ok: boolean }>) => {
     setError(null);
@@ -134,7 +134,17 @@ export function ActionsPage() {
   return (
     <Grid container spacing={3}>
       <Grid item xs={12}>
-        <Typography variant="h4" gutterBottom>Aktionen</Typography>
+        <Stack direction="row" spacing={2} alignItems="center">
+          <Typography variant="h4" gutterBottom sx={{ mb: 0 }}>Aktionen</Typography>
+          {activeKinds.length > 0 && (
+            <Chip
+              size="small"
+              color="warning"
+              label={`Aktiv: ${activeKinds.map((k) => KIND_LABEL[k] ?? k).join(', ')}`}
+              title="Laufende Prozesse (Sperren). Falls hier etwas hängt, Server neu starten."
+            />
+          )}
+        </Stack>
       </Grid>
 
       {error && (
@@ -335,6 +345,92 @@ export function ActionsPage() {
               </Typography>
             )}
             {targetScan && targetScan.errors.length > 0 && <ErrorList errors={targetScan.errors} title={targetRunning ? 'Fehler bislang:' : 'Fehler im letzten Scan:'} />}
+          </CardContent>
+        </Card>
+      </Grid>
+
+      <Grid item xs={12} md={6}>
+        <Card>
+          <CardContent>
+            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+              <RefreshIcon color="primary" />
+              <Typography variant="h6">Erneuter Scan</Typography>
+              <Chip label={STATUS_LABEL[rescan?.status ?? 'idle']} color={rescanRunning ? 'warning' : rescan?.status === 'completed' ? 'success' : rescan?.status === 'aborted' || rescan?.status === 'stopped' ? 'error' : 'default'} />
+              <Box sx={{ flexGrow: 1 }} />
+              <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={async () => { await api.abortRescan(); await loadStatus(); }} disabled={!rescanRunning}>
+                Abbrechen
+              </Button>
+            </Stack>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              Wird über das Scan-Symbol an Dateien und Kacheln gestartet. Analysiert die gewählten Dateien erneut (Hash, Metadaten, Gerät, Vorschaubild).
+            </Typography>
+            {(rescanRunning || (rescan && rescan.status !== 'idle' && rescan.total > 0)) && (
+              <>
+                <LinearProgress variant="determinate" value={rescan && rescan.total > 0 ? Math.round((rescan.checked / rescan.total) * 100) : 0} sx={{ mt: 2 }} />
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  {(rescan?.checked ?? 0).toLocaleString('de-DE')} von {(rescan?.total ?? 0).toLocaleString('de-DE')} geprüft
+                  {(rescan?.removed ?? 0) > 0 && <>, <span style={{ color: '#d32f2f' }}>{rescan!.removed.toLocaleString('de-DE')} fehlende entfernt</span></>}
+                </Typography>
+              </>
+            )}
+            {rescan?.currentFile && rescanRunning && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>
+                {rescan.currentFile}
+              </Typography>
+            )}
+            {rescan?.startedAt && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Gestartet: {formatDateTime(rescan.startedAt)}{rescan.finishedAt ? ` · Beendet: ${formatDateTime(rescan.finishedAt)}` : ''}
+              </Typography>
+            )}
+            {rescan && rescan.errors.length > 0 && <ErrorList errors={rescan.errors} title={rescanRunning ? 'Fehler bislang:' : 'Fehler im letzten Lauf:'} />}
+          </CardContent>
+        </Card>
+      </Grid>
+
+      <Grid item xs={12} md={6}>
+        <Card>
+          <CardContent>
+            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+              <FileCopyIcon color="primary" />
+              <Typography variant="h6">Transferred-Check</Typography>
+              <Chip label={STATUS_LABEL[transferredCheck?.status ?? 'idle']} color={transferredCheckRunning ? 'warning' : transferredCheck?.status === 'completed' ? 'success' : transferredCheck?.status === 'aborted' || transferredCheck?.status === 'stopped' ? 'error' : 'default'} />
+              <Box sx={{ flexGrow: 1 }} />
+              {!transferredCheckRunning && (
+                <Button variant="contained" startIcon={<PlayArrowIcon />} onClick={() => runAction(api.startTransferredCheck)} disabled={starting}>
+                  Prüfung starten
+                </Button>
+              )}
+              <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={async () => { await api.abortTransferredCheck(); await loadStatus(); }} disabled={!transferredCheckRunning}>
+                Abbrechen
+              </Button>
+            </Stack>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              Prüft rein über die Datenbank, ob Upload-Dateien bereits in der Bibliothek liegen: zuerst per Dateiname, bei Treffer per md5. Gefundene Dateien werden als übertragen markiert; ohne md5 bleibt der Status pending.
+            </Typography>
+            {(transferredCheckRunning || (transferredCheck && transferredCheck.status !== 'idle' && transferredCheck.total > 0)) && (
+              <>
+                <LinearProgress variant="determinate" value={transferredCheck && transferredCheck.total > 0 ? Math.round((transferredCheck.checked / transferredCheck.total) * 100) : 0} sx={{ mt: 2 }} />
+                <Box sx={{ mt: 2 }}>
+                  <Grid container spacing={2}>
+                    <Metric label="Geprüft" value={transferredCheck?.checked ?? 0} />
+                    <Metric label="Übertragen" value={transferredCheck?.transferred ?? 0} />
+                    <Metric label="Offen" value={transferredCheck?.undecided ?? 0} />
+                  </Grid>
+                </Box>
+              </>
+            )}
+            {transferredCheck?.currentFile && transferredCheckRunning && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>
+                {transferredCheck.currentFile}
+              </Typography>
+            )}
+            {transferredCheck?.startedAt && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Gestartet: {formatDateTime(transferredCheck.startedAt)}{transferredCheck.finishedAt ? ` · Beendet: ${formatDateTime(transferredCheck.finishedAt)}` : ''}
+              </Typography>
+            )}
+            {transferredCheck && transferredCheck.errors.length > 0 && <ErrorList errors={transferredCheck.errors} title={transferredCheckRunning ? 'Fehler bislang:' : 'Fehler im letzten Lauf:'} />}
           </CardContent>
         </Card>
       </Grid>

@@ -1,6 +1,6 @@
-export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck';
+export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck' | 'rescan' | 'transferredCheck';
 
-const EXCLUSIVE_KINDS: readonly RunKind[] = ['transfer', 'recheck'];
+const EXCLUSIVE_KINDS: readonly RunKind[] = ['transfer', 'recheck', 'rescan', 'transferredCheck'];
 
 const active = new Set<RunKind>();
 

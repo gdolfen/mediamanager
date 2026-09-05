@@ -9,8 +9,10 @@ import { SettingsPage } from './pages/SettingsPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { UploadPage } from './pages/UploadPage';
 import { LogsPage } from './pages/LogsPage';
+import { DevToolsPage } from './pages/DevToolsPage';
 import { DevicePage, IdentifierPage, ImagePage, FormatPage } from './pages/DetailPages';
 import { api } from './api/client';
+import { useHashRoute } from './hooks/useHashRoute';
 
 type Detail =
   | { kind: 'image'; fileId: number }
@@ -19,10 +21,14 @@ type Detail =
   | { kind: 'format'; ext: string }
   | null;
 
+const VALID_PAGES: PageKey[] = ['dashboard', 'upload', 'library', 'actions', 'problems', 'devices', 'settings', 'logs', 'devtools'];
+
 export default function App() {
-  const [page, setPage] = useState<PageKey>('dashboard');
+  const [hashRoute, hashParams, setHashRoute] = useHashRoute();
   const [detail, setDetail] = useState<Detail>(null);
   const [snack, setSnack] = useState<{ severity: 'success' | 'error' | 'info'; text: string } | null>(null);
+
+  const page: PageKey = (hashRoute as PageKey) || 'dashboard';
 
   const notify = (text: string, severity: 'success' | 'error' | 'info' = 'info') => setSnack({ severity, text });
 
@@ -32,7 +38,7 @@ export default function App() {
     setDetail({ kind: 'identifier', identifierKind, identifierValue }), []);
   const openFormat = useCallback((ext: string) => setDetail({ kind: 'format', ext }), []);
   const goBack = useCallback(() => setDetail(null), []);
-  const navigate = useCallback((p: PageKey) => { setDetail(null); setPage(p); }, []);
+  const navigate = useCallback((p: PageKey) => { setDetail(null); setHashRoute(p); }, [setHashRoute]);
 
   const startTransfer = useCallback(async (): Promise<boolean> => {
     try {
@@ -59,13 +65,14 @@ export default function App() {
         )}
         {detail?.kind === 'format' && <FormatPage ext={detail.ext} onBack={goBack} onOpenImage={openImage} onOpenDevice={openDevice} />}
         {!detail && page === 'dashboard' && <Dashboard onStartTransfer={startTransfer} onNavigate={navigate} />}
-        {!detail && page === 'library' && <LibraryPage onOpenImage={openImage} onOpenDevice={openDevice} />}
-        {!detail && page === 'upload' && <UploadPage onOpenImage={openImage} onOpenDevice={openDevice} />}
+        {!detail && page === 'library' && <LibraryPage onOpenImage={openImage} onOpenDevice={openDevice} onNavigate={navigate} />}
+        {!detail && page === 'upload' && <UploadPage onOpenImage={openImage} onOpenDevice={openDevice} onNavigate={navigate} />}
         {!detail && page === 'actions' && <ActionsPage />}
         {!detail && page === 'problems' && <ProblemsPage onStartTransfer={startTransfer} />}
         {!detail && page === 'devices' && <DevicesPage onOpenImage={openImage} onOpenDevice={openDevice} onOpenIdentifier={openIdentifier} />}
         {!detail && page === 'settings' && <SettingsPage onOpenFormat={openFormat} />}
         {!detail && page === 'logs' && <LogsPage />}
+        {!detail && page === 'devtools' && <DevToolsPage />}
       </Layout>
       <Snackbar open={Boolean(snack)} autoHideDuration={4000} onClose={() => setSnack(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
         <Alert severity={snack?.severity ?? 'info'} onClose={() => setSnack(null)} variant="filled">

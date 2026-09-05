@@ -65,38 +65,48 @@ export function requestRecheckAbort(): boolean {
 export function startRecheck(opts?: { resume?: boolean }): { ok: boolean; error?: string } {
   if (isRecheckRunning()) return { ok: false, error: 'Eine Neubewertung läuft bereits.' };
   if (!tryAcquire('recheck')) return { ok: false, error: 'Ein anderer Scan/Transfer läuft gerade.' };
-  abortRequested = false;
-  const run = startRun('recheck');
-  const resume = Boolean(opts?.resume && ['running', 'aborted', 'stopped'].includes(getScanProgress('recheck')?.status ?? ''));
-  if (resume) {
-    const p = getScanProgress('recheck')!;
-    state.status = 'running';
-    state.runId = run.id;
-    state.total = p.scanned;
-    state.checked = p.scanned;
-    state.created = 0;
-    state.resolved = 0;
-    state.currentFile = null;
-    state.errors = [];
-    state.startedAt = p.startedAt;
-    state.finishedAt = null;
-    logger.info('scan', `Probleme-Neubewertung wird fortgesetzt (${p.scanned} geprüft).`);
-  } else {
-    saveScanProgress('recheck', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, current: null });
-    state.status = 'running';
-    state.runId = run.id;
-    state.total = 0;
-    state.checked = 0;
-    state.created = 0;
-    state.resolved = 0;
-    state.currentFile = null;
-    state.errors = [];
-    state.startedAt = new Date().toISOString();
-    state.finishedAt = null;
-    logger.info('scan', 'Probleme-Neubewertung gestartet.');
+  try {
+    abortRequested = false;
+    const run = startRun('recheck');
+    const resume = Boolean(opts?.resume && ['running', 'aborted', 'stopped'].includes(getScanProgress('recheck')?.status ?? ''));
+    if (resume) {
+      const p = getScanProgress('recheck')!;
+      state.status = 'running';
+      state.runId = run.id;
+      state.total = p.scanned;
+      state.checked = p.scanned;
+      state.created = 0;
+      state.resolved = 0;
+      state.currentFile = null;
+      state.errors = [];
+      state.startedAt = p.startedAt;
+      state.finishedAt = null;
+      logger.info('scan', `Probleme-Neubewertung wird fortgesetzt (${p.scanned} geprüft).`);
+    } else {
+      saveScanProgress('recheck', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, current: null });
+      state.status = 'running';
+      state.runId = run.id;
+      state.total = 0;
+      state.checked = 0;
+      state.created = 0;
+      state.resolved = 0;
+      state.currentFile = null;
+      state.errors = [];
+      state.startedAt = new Date().toISOString();
+      state.finishedAt = null;
+      logger.info('scan', 'Probleme-Neubewertung gestartet.');
+    }
+    void runRecheckInternal(resume);
+    return { ok: true };
+  } catch (err) {
+    state.status = 'idle';
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('scan', `Probleme-Neubewertung konnte nicht gestartet werden: ${msg}`);
+    return { ok: false, error: msg };
+  } finally {
+    // Lock nur behalten, wenn der Job wirklich läuft – sonst Geister-Sperre.
+    if (state.status !== 'running') release('recheck');
   }
-  void runRecheckInternal(resume);
-  return { ok: true };
 }
 
 function persistRecheckProgress(fileId: number): void {

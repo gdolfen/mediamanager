@@ -18,6 +18,7 @@ import {
   TableCell,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -29,13 +30,13 @@ import FileCopyIcon from '@mui/icons-material/FileCopy';
 import ImageIcon from '@mui/icons-material/Image';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { api } from '../api/client';
-import { useEta, formatEta } from '../hooks/useEta';
 import { usePolling } from '../hooks/usePolling';
 import { formatDateTime } from '../utils/date';
-import type { TransferredCheckState, RescanState, RunKind, RunRecord, TargetScanState, ThumbnailStatus, TransferState, UploadScanState } from '../types';
+import type { TransferredCheckState, ScanWorkerState, ScanJobInfo, ActiveScanFile, RunKind, RunRecord, TargetScanState, ThumbnailStatus, TransferState, UploadScanState } from '../types';
 
 const STATUS_LABEL: Record<string, string> = {
   idle: 'Bereit',
+  queued: 'Warteschlange',
   running: 'Läuft',
   completed: 'Abgeschlossen',
   aborted: 'Abgebrochen',
@@ -47,7 +48,7 @@ const KIND_LABEL: Record<RunKind, string> = {
   uploadScan: 'Upload-Scan',
   targetScan: 'Zielordner-Scan',
   recheck: 'Neubewertung',
-  rescan: 'Erneuter Scan',
+  scan: 'Scan',
   transferredCheck: 'Transferred-Check',
 };
 
@@ -55,8 +56,9 @@ export function ActionsPage() {
   const [transfer, setTransfer] = useState<TransferState | null>(null);
   const [uploadScan, setUploadScan] = useState<UploadScanState | null>(null);
   const [targetScan, setTargetScan] = useState<TargetScanState | null>(null);
-  const [rescan, setRescan] = useState<RescanState | null>(null);
-  const [transferredCheck, setDupcheck] = useState<TransferredCheckState | null>(null);
+  const [scan, setScan] = useState<ScanWorkerState | null>(null);
+  const [scanJobs, setScanJobs] = useState<ScanJobInfo[]>([]);
+  const [transferredCheck, setTransferredCheck] = useState<TransferredCheckState | null>(null);
   const [activeKinds, setActiveKinds] = useState<RunKind[]>([]);
   const [thumbnails, setThumbnails] = useState<ThumbnailStatus | null>(null);
   const [runs, setRuns] = useState<RunRecord[]>([]);
@@ -64,11 +66,12 @@ export function ActionsPage() {
   const [starting, setStarting] = useState(false);
 
   const loadStatus = useCallback(async () => {
-    const [t, u, ta, rs, dc, st, th, r] = await Promise.allSettled([
+    const [t, u, ta, sc, sj, dc, st, th, r] = await Promise.allSettled([
       api.transferStatus(),
       api.uploadScanStatus(),
       api.targetScanStatus(),
-      api.rescanStatus(),
+      api.scanStatus(),
+      api.scanJobs(),
       api.transferredCheckStatus(),
       api.stats(),
       api.thumbnailStatus(),
@@ -77,8 +80,9 @@ export function ActionsPage() {
     if (t.status === 'fulfilled') setTransfer(t.value);
     if (u.status === 'fulfilled') setUploadScan(u.value);
     if (ta.status === 'fulfilled') setTargetScan(ta.value);
-    if (rs.status === 'fulfilled') setRescan(rs.value);
-    if (dc.status === 'fulfilled') setDupcheck(dc.value);
+    if (sc.status === 'fulfilled') setScan(sc.value);
+    if (sj.status === 'fulfilled') setScanJobs(sj.value);
+    if (dc.status === 'fulfilled') setTransferredCheck(dc.value);
     if (st.status === 'fulfilled') setActiveKinds(st.value.active ?? []);
     if (th.status === 'fulfilled') setThumbnails(th.value);
     if (r.status === 'fulfilled') setRuns(r.value);
@@ -89,21 +93,10 @@ export function ActionsPage() {
   const transferRunning = transfer?.status === 'running';
   const uploadRunning = uploadScan?.status === 'running';
   const targetRunning = targetScan?.status === 'running';
-  const rescanRunning = rescan?.status === 'running';
+  const scanRunning = scan?.running === true;
   const transferredCheckRunning = transferredCheck?.status === 'running';
   const thumbPending = (thumbnails?.pending ?? 0) > 0;
-  const anythingActive = transferRunning || uploadRunning || targetRunning || rescanRunning || transferredCheckRunning || thumbPending;
-
-  const etaUpload = useEta(
-    uploadScan?.phase === 'analyze' ? (uploadScan?.analyzed ?? 0) : (uploadScan?.scanned ?? 0),
-    uploadScan?.phase === 'analyze' ? (uploadScan?.indexed ?? 0) : (uploadScan?.totalFiles ?? 0),
-    uploadRunning
-  );
-  const etaTarget = useEta(
-    targetScan?.phase === 'analyze' ? (targetScan?.analyzed ?? 0) : (targetScan?.scanned ?? 0),
-    targetScan?.phase === 'analyze' ? (targetScan?.indexed ?? 0) : (targetScan?.totalFiles ?? 0),
-    targetRunning
-  );
+  const anythingActive = transferRunning || uploadRunning || targetRunning || scanRunning || transferredCheckRunning || thumbPending;
 
   usePolling(loadStatus, 2000, anythingActive);
 
@@ -196,54 +189,39 @@ export function ActionsPage() {
                   Fortsetzen
                 </Button>
               ) : (
-                <Button variant="contained" startIcon={<PlayArrowIcon />} onClick={startUploadScan} disabled={uploadRunning}>
-                  Upload-Ordner scannen
-                </Button>
+              <Button variant="contained" startIcon={<PlayArrowIcon />} onClick={startUploadScan} disabled={uploadRunning}>
+                Upload-Ordner indexieren
+              </Button>
               )}
               <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={async () => { await api.abortUploadScan(); }} disabled={!uploadRunning}>
                 Abbrechen
               </Button>
               {uploadRunning && (
-                <Chip
-                  label={uploadScan?.phase === 'analyze' ? 'Phase 2: Analysieren' : 'Phase 1: Durchsuchen'}
-                  color={uploadScan?.phase === 'analyze' ? 'secondary' : 'info'}
-                />
+                <Chip label="Indexierung" color="info" />
               )}
               {!uploadRunning && (
                 <Chip label={STATUS_LABEL[uploadScan?.status ?? 'idle']} color={uploadScan?.status === 'completed' ? 'success' : uploadScan?.status === 'aborted' ? 'error' : 'default'} />
               )}
             </Stack>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Dateien im Upload-Ordner durchsuchen und indexieren.
+              Durchsucht den Upload-Ordner und indexiert Dateien. Die Analyse läuft anschließend automatisch als Scan-Prozess.
             </Typography>
             {uploadRunning && (
               <LinearProgress
-                variant={etaUpload != null ? 'determinate' : 'indeterminate'}
-                value={etaUpload != null
-                  ? (uploadScan?.phase === 'analyze'
-                    ? (uploadScan.indexed > 0 ? Math.round((uploadScan.analyzed / uploadScan.indexed) * 100) : 0)
-                    : (uploadScan?.totalFiles ?? 0) > 0 ? Math.round(((uploadScan?.scanned ?? 0) / (uploadScan?.totalFiles ?? 1)) * 100) : 0)
-                  : undefined
-                }
+                variant={(uploadScan?.totalFiles ?? 0) > 0 ? 'determinate' : 'indeterminate'}
+                value={(uploadScan?.totalFiles ?? 0) > 0 ? Math.round(((uploadScan?.scanned ?? 0) / (uploadScan?.totalFiles ?? 1)) * 100) : undefined}
                 sx={{ mt: 2 }}
               />
             )}
             <Box sx={{ mt: 2 }}>
-              {uploadScan?.phase === 'analyze' ? (
-                <Typography variant="body2" color="text.secondary">
-                  {uploadScan.analyzed.toLocaleString('de-DE')} von {uploadScan.indexed.toLocaleString('de-DE')} analysiert
-                  {uploadScan.errors.length > 0 && <>, <span style={{ color: '#d32f2f' }}>{uploadScan.errors.length} Fehler</span></>}
-                </Typography>
-              ) : (
-                <Grid container spacing={2}>
-                  <Metric label="Gescannt" value={uploadScan?.scanned ?? 0} />
-                  <Metric label="Dateien" value={uploadScan?.totalFiles ?? 0} />
-                  <Metric label="Ordner" value={uploadScan?.totalDirs ?? 0} />
-                  {(uploadScan?.errors.length ?? 0) > 0 && <Metric label="Fehler" value={uploadScan!.errors.length} />}
-                </Grid>
-              )}
+              <Grid container spacing={2}>
+                <Metric label="Gescannt" value={uploadScan?.scanned ?? 0} />
+                <Metric label="Dateien" value={uploadScan?.totalFiles ?? 0} />
+                <Metric label="Ordner" value={uploadScan?.totalDirs ?? 0} />
+                {(uploadScan?.errors.length ?? 0) > 0 && <Metric label="Fehler" value={uploadScan!.errors.length} />}
+              </Grid>
             </Box>
-            {uploadScan?.currentDirs && uploadScan.currentDirs.length > 0 && uploadRunning && uploadScan.phase === 'walk' && (
+            {uploadScan?.currentDirs && uploadScan.currentDirs.length > 0 && uploadRunning && (
               <Box sx={{ mt: 1 }}>
                 <Typography variant="caption" color="text.secondary">Aktive Verzeichnisse:</Typography>
                 <Box component="ul" sx={{ m: 0, pl: 2, listStyle: 'none' }}>
@@ -252,16 +230,6 @@ export function ActionsPage() {
                   ))}
                 </Box>
               </Box>
-            )}
-            {uploadScan?.currentFile && uploadRunning && uploadScan.phase === 'analyze' && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>
-                {uploadScan.currentFile}
-              </Typography>
-            )}
-            {uploadRunning && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Restzeit {formatEta(etaUpload)}
-              </Typography>
             )}
             {uploadScan && uploadScan.errors.length > 0 && <ErrorList errors={uploadScan.errors} title={uploadRunning ? 'Fehler bislang:' : 'Fehler im letzten Scan:'} />}
           </CardContent>
@@ -278,53 +246,38 @@ export function ActionsPage() {
                 </Button>
               ) : (
                 <Button variant="contained" startIcon={<SearchIcon />} onClick={startTargetScan} disabled={targetRunning}>
-                  Zielordner scannen
+                  Zielordner indexieren
                 </Button>
               )}
               <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={async () => { await api.abortTargetScan(); }} disabled={!targetRunning}>
                 Abbrechen
               </Button>
               {targetRunning && (
-                <Chip
-                  label={targetScan?.phase === 'analyze' ? 'Phase 2: Analysieren' : 'Phase 1: Durchsuchen'}
-                  color={targetScan?.phase === 'analyze' ? 'secondary' : 'info'}
-                />
+                <Chip label="Indexierung" color="info" />
               )}
               {!targetRunning && (
                 <Chip label={STATUS_LABEL[targetScan?.status ?? 'idle']} color={targetScan?.status === 'completed' ? 'success' : targetScan?.status === 'aborted' ? 'error' : 'default'} />
               )}
             </Stack>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Durchsucht die Zielordner (Fotos/Videos) und aktualisiert die Bibliothek.
+              Durchsucht die Zielordner (Fotos/Videos) und indexiert neue Dateien. Die Analyse läuft anschließend automatisch als Scan-Prozess.
             </Typography>
             {targetRunning && (
               <LinearProgress
-                variant={etaTarget != null ? 'determinate' : 'indeterminate'}
-                value={etaTarget != null
-                  ? (targetScan?.phase === 'analyze'
-                    ? (targetScan.indexed > 0 ? Math.round((targetScan.analyzed / targetScan.indexed) * 100) : 0)
-                    : (targetScan?.totalFiles ?? 0) > 0 ? Math.round(((targetScan?.scanned ?? 0) / (targetScan?.totalFiles ?? 1)) * 100) : 0)
-                  : undefined
-                }
+                variant={(targetScan?.totalFiles ?? 0) > 0 ? 'determinate' : 'indeterminate'}
+                value={(targetScan?.totalFiles ?? 0) > 0 ? Math.round(((targetScan?.scanned ?? 0) / (targetScan?.totalFiles ?? 1)) * 100) : undefined}
                 sx={{ mt: 2 }}
               />
             )}
             <Box sx={{ mt: 2 }}>
-              {targetScan?.phase === 'analyze' ? (
-                <Typography variant="body2" color="text.secondary">
-                  {targetScan.analyzed.toLocaleString('de-DE')} von {targetScan.indexed.toLocaleString('de-DE')} analysiert
-                  {targetScan.errors.length > 0 && <>, <span style={{ color: '#d32f2f' }}>{targetScan.errors.length} Fehler</span></>}
-                </Typography>
-              ) : (
-                <Grid container spacing={2}>
-                  <Metric label="Gescannt" value={targetScan?.scanned ?? 0} />
-                  <Metric label="Dateien" value={targetScan?.totalFiles ?? 0} />
-                  <Metric label="Ordner" value={targetScan?.totalDirs ?? 0} />
-                  {(targetScan?.errors.length ?? 0) > 0 && <Metric label="Fehler" value={targetScan!.errors.length} />}
-                </Grid>
-              )}
+              <Grid container spacing={2}>
+                <Metric label="Gescannt" value={targetScan?.scanned ?? 0} />
+                <Metric label="Dateien" value={targetScan?.totalFiles ?? 0} />
+                <Metric label="Ordner" value={targetScan?.totalDirs ?? 0} />
+                {(targetScan?.errors.length ?? 0) > 0 && <Metric label="Fehler" value={targetScan!.errors.length} />}
+              </Grid>
             </Box>
-            {targetScan?.currentDirs && targetScan.currentDirs.length > 0 && targetRunning && targetScan.phase === 'walk' && (
+            {targetScan?.currentDirs && targetScan.currentDirs.length > 0 && targetRunning && (
               <Box sx={{ mt: 1 }}>
                 <Typography variant="caption" color="text.secondary">Aktive Verzeichnisse:</Typography>
                 <Box component="ul" sx={{ m: 0, pl: 2, listStyle: 'none' }}>
@@ -333,16 +286,6 @@ export function ActionsPage() {
                   ))}
                 </Box>
               </Box>
-            )}
-            {targetScan?.currentFile && targetRunning && targetScan.phase === 'analyze' && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>
-                {targetScan.currentFile}
-              </Typography>
-            )}
-            {targetRunning && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Restzeit {formatEta(etaTarget)}
-              </Typography>
             )}
             {targetScan && targetScan.errors.length > 0 && <ErrorList errors={targetScan.errors} title={targetRunning ? 'Fehler bislang:' : 'Fehler im letzten Scan:'} />}
           </CardContent>
@@ -354,36 +297,86 @@ export function ActionsPage() {
           <CardContent>
             <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
               <RefreshIcon color="primary" />
-              <Typography variant="h6">Erneuter Scan</Typography>
-              <Chip label={STATUS_LABEL[rescan?.status ?? 'idle']} color={rescanRunning ? 'warning' : rescan?.status === 'completed' ? 'success' : rescan?.status === 'aborted' || rescan?.status === 'stopped' ? 'error' : 'default'} />
-              <Box sx={{ flexGrow: 1 }} />
-              <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={async () => { await api.abortRescan(); await loadStatus(); }} disabled={!rescanRunning}>
-                Abbrechen
-              </Button>
+              <Typography variant="h6">Scan</Typography>
+              <Chip label={scanRunning ? 'Läuft' : scan && scan.lastStatus !== 'idle' ? STATUS_LABEL[scan.lastStatus] : 'Bereit'} color={scanRunning ? 'warning' : scan?.lastStatus === 'completed' ? 'success' : scan && scan.lastStatus !== 'idle' ? 'error' : 'default'} />
+              {(scan?.openJobs ?? 0) > 0 && (
+                <Chip size="small" variant="outlined" label={`${scan!.openJobs} offene Aufgabe${scan!.openJobs === 1 ? '' : 'n'} (${scan!.openFiles.toLocaleString('de-DE')} Dateien)`} />
+              )}
             </Stack>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Wird über das Scan-Symbol an Dateien und Kacheln gestartet. Analysiert die gewählten Dateien erneut (Hash, Metadaten, Gerät, Vorschaubild).
+              Analysiert Dateien aus der Warteschlange (Hash, Metadaten, Gerät, Vorschaubild) – gespeist aus Kachel-Aktionen und abgeschlossener Indexierung. Mehrere Aufgaben werden nacheinander abgearbeitet.
             </Typography>
-            {(rescanRunning || (rescan && rescan.status !== 'idle' && rescan.total > 0)) && (
+            {scan?.current && (
               <>
-                <LinearProgress variant="determinate" value={rescan && rescan.total > 0 ? Math.round((rescan.checked / rescan.total) * 100) : 0} sx={{ mt: 2 }} />
+                <LinearProgress variant="determinate" value={scan.current.total > 0 ? Math.round((scan.current.checked / scan.current.total) * 100) : 0} sx={{ mt: 2 }} />
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  {(rescan?.checked ?? 0).toLocaleString('de-DE')} von {(rescan?.total ?? 0).toLocaleString('de-DE')} geprüft
-                  {(rescan?.removed ?? 0) > 0 && <>, <span style={{ color: '#d32f2f' }}>{rescan!.removed.toLocaleString('de-DE')} fehlende entfernt</span></>}
+                  {scan.current.label}: {scan.current.checked.toLocaleString('de-DE')} von {scan.current.total.toLocaleString('de-DE')} geprüft
                 </Typography>
+                {scan.remainingMs != null && (
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                    Restzeit {formatDuration(scan.remainingMs)}
+                  </Typography>
+                )}
               </>
             )}
-            {rescan?.currentFile && rescanRunning && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }} noWrap>
-                {rescan.currentFile}
-              </Typography>
+            {scanRunning && (
+              <ActiveFilesList title="Aktive Dateien" files={scan.activeFiles ?? []} />
             )}
-            {rescan?.startedAt && (
+            {scan && !scanRunning && scan.lastFinishedAt && (
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Gestartet: {formatDateTime(rescan.startedAt)}{rescan.finishedAt ? ` · Beendet: ${formatDateTime(rescan.finishedAt)}` : ''}
+                Letzter Lauf: {formatDateTime(scan.lastFinishedAt)} · {scan.lastChecked.toLocaleString('de-DE')} geprüft{scan.lastRemoved > 0 && <>, <span style={{ color: '#d32f2f' }}>{scan.lastRemoved.toLocaleString('de-DE')} fehlende entfernt</span></>}
               </Typography>
             )}
-            {rescan && rescan.errors.length > 0 && <ErrorList errors={rescan.errors} title={rescanRunning ? 'Fehler bislang:' : 'Fehler im letzten Lauf:'} />}
+            {scan && scan.errors.length > 0 && <ErrorList errors={scan.errors} title={scanRunning ? 'Fehler bislang:' : 'Fehler im letzten Lauf:'} />}
+            {scanJobs.filter((j) => j.status !== 'completed').length > 0 && (
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" gutterBottom>Aufgaben</Typography>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Auftrag</TableCell>
+                      <TableCell>Status</TableCell>
+                      <TableCell align="right">Geprüft</TableCell>
+                      <TableCell align="right">Gesamt</TableCell>
+                      <TableCell align="right">Aktion</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {scanJobs.filter((j) => j.status !== 'completed').map((j) => (
+                      <TableRow key={j.id} hover>
+                        <TableCell sx={{ maxWidth: 260 }}><Typography variant="body2" noWrap title={`#${j.id} ${j.label}`}>#{j.id} {j.label}</Typography></TableCell>
+                        <TableCell><Chip size="small" label={STATUS_LABEL[j.status] ?? j.status} color={j.status === 'running' ? 'warning' : j.status === 'completed' ? 'success' : j.status === 'queued' ? 'info' : 'error'} /></TableCell>
+                        <TableCell align="right">{j.checked.toLocaleString('de-DE')}</TableCell>
+                        <TableCell align="right">{j.total.toLocaleString('de-DE')}</TableCell>
+                        <TableCell align="right">
+                          {j.status === 'running' && (
+                            <Tooltip title="Auftrag abbrechen">
+                              <IconButton size="small" color="error" onClick={async () => { await api.abortScan(); await loadStatus(); }}>
+                                <StopIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {(j.status === 'stopped' || j.status === 'aborted') && (
+                            <Tooltip title="Auftrag fortsetzen">
+                              <IconButton size="small" onClick={() => runAction(() => api.resumeScanJob(j.id))}>
+                                <PlayArrowIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {j.status === 'queued' && (
+                            <Tooltip title="Auftrag löschen">
+                              <IconButton size="small" color="error" onClick={() => runAction(() => api.deleteScanJob(j.id))}>
+                                <DeleteIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+            )}
           </CardContent>
         </Card>
       </Grid>
@@ -512,6 +505,44 @@ export function ActionsPage() {
 function thumbProgress(t: ThumbnailStatus | null): number {
   if (!t || t.total === 0) return 0;
   return Math.round(((t.total - t.pending) / t.total) * 100);
+}
+
+function formatBytes(bytes: number | null): string {
+  if (bytes == null) return '–';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function formatElapsed(startedAt: string): string {
+  const s = Math.max(0, Math.round((Date.now() - new Date(startedAt).getTime()) / 1000));
+  if (s < 60) return `${s} s`;
+  return `${Math.floor(s / 60)} min ${s % 60} s`;
+}
+
+function formatDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `ca. ${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `ca. ${m} min ${s % 60} s`;
+  return `ca. ${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+function ActiveFilesList({ title, files }: { title: string; files: ActiveScanFile[] }) {
+  if (!files || files.length === 0) return null;
+  // Neueste zuerst: oben die zuletzt begonnene, unten die längste laufende Datei.
+  const ordered = [...files].reverse();
+  return (
+    <Box sx={{ mt: 1 }}>
+      <Typography variant="caption" color="text.secondary">{title} ({files.length}):</Typography>
+      <Box component="ul" sx={{ m: 0, pl: 2, listStyle: 'none', maxHeight: 160, overflow: 'auto' }}>
+        {ordered.map((f, i) => (
+          <li key={i}><Typography variant="caption" color="text.secondary" noWrap display="block" title={`${f.file} · ${formatBytes(f.sizeBytes)} · seit ${formatElapsed(f.startedAt)} · ETA ${formatDuration(f.etaMs)}`}>{f.file} · {formatBytes(f.sizeBytes)} · {formatElapsed(f.startedAt)} · ETA {formatDuration(f.etaMs)}</Typography></li>
+        ))}
+      </Box>
+    </Box>
+  );
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

@@ -17,6 +17,7 @@ import { parseDateFromFilename, differsByDay, localDateKey, toLocalIso, isWhatsA
 import type { ScannedFile } from './scanner.js';
 import { problemTypeDef } from './problemCatalog.js';
 import { resolveBase, pathExists } from './paths.js';
+import { perfStart, perfMark, perfLog } from './perf.js';
 import type { FileRecord, FileStatus, ProblemType } from '../types.js';
 
 export const PROBLEM_DEVIATION_MARGIN_DAYS = 30;
@@ -143,18 +144,32 @@ function reportBirthtimeAnomaly(
 }
 
 /** Evaluates a scanned upload file: indexes it, determines status and target path, reports problems.
- *  Does NOT copy anything. The transfer run uses the result to copy, the scan run only indexes. */
+ *  Does NOT copy anything. The transfer run uses the result to copy, the scan run only indexes.
+ *  Der zurückgegebene Status wird immer in die DB zurückgeschrieben, damit analysierte
+ *  Dateien nicht auf 'indexed' stehen bleiben ('indexed' = nur Walk, noch nicht analysiert). */
 export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = {}): Promise<EvaluationResult> {
+  const result = await evaluateFileInner(file, cb);
+  updateFile(result.fileId, { status: result.status });
+  return result;
+}
+
+async function evaluateFileInner(file: ScannedFile, cb: EvaluationCallbacks = {}): Promise<EvaluationResult> {
+  const perf = perfStart();
   const report = (fileId: number, type: ProblemType, message: string) => {
-    const def = problemTypeDef(type);
-    const { active } = upsertProblem({
-      fileId,
-      type,
-      severity: def.severity,
-      message,
-      actionType: def.actions[0]?.id ?? null,
-    });
-    cb.onProblem?.(fileId, type, message, active);
+    const tDb = performance.now();
+    try {
+      const def = problemTypeDef(type);
+      const { active } = upsertProblem({
+        fileId,
+        type,
+        severity: def.severity,
+        message,
+        actionType: def.actions[0]?.id ?? null,
+      });
+      cb.onProblem?.(fileId, type, message, active);
+    } finally {
+      perf.db += performance.now() - tDb;
+    }
   };
 
   const existing = getFileBySource(file.relPath);
@@ -171,6 +186,7 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
   if (!fileType) {
     const id = existing?.id ?? upsertFile({ ...baseFields(file, 'other', ext, originalName, nowMtime, isWhatsApp), status: 'pending' });
     report(id, 'UNSUPPORTED_FORMAT', `Dateiformat ".${ext}" wird nicht unterstützt und kann nicht einsortiert werden.`);
+    perfLog('upload', file.relPath, perf, 'unsupported');
     return { fileId: id, reason: 'unsupported', status: 'pending', hash: null, md5: null, targetInfo: null, targetAbs: null, takenAt: null, dateSource: 'file', deviceId: null, deviceRaw: null, make: null, model: null, fileType: 'other' };
   }
 
@@ -178,16 +194,22 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
   let hash = reusable ? existing.hash : null;
   let md5 = reusable ? existing.md5 : null;
   if (!hash || !md5) {
+    const tRead = performance.now();
     const hashes = await hashFile(file.absPath);
+    const dtRead = performance.now() - tRead;
+    perf.read += dtRead;
+    perf.hash += dtRead;
+    perf.md5 += dtRead;
     if (!hash) hash = hashes.sha256;
     if (!md5) md5 = hashes.md5;
   }
-  const duplicate = getFileByHash(hash);
+  const duplicate = await perfMark(perf, 'db', () => getFileByHash(hash));
   if (duplicate && duplicate.id !== existing?.id) {
     const id = existing?.id ?? upsertFile({ ...baseFields(file, fileType, ext, originalName, nowMtime, isWhatsApp), hash, md5, status: 'transferred' });
     reportBirthtimeAnomaly(id, file, birthMs, report);
     enqueueThumbnail(id);
     updateFile(id, { targetRoot: duplicate.targetRoot, targetRelPath: duplicate.targetRelPath, hash, md5, status: 'transferred', isWhatsApp, transferredAt: new Date().toISOString() });
+    perfLog('upload', file.relPath, perf, 'duplicate');
     return {
       fileId: id,
       reason: 'duplicate',
@@ -212,6 +234,7 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
       const targetAbs = resolveBase(rootBase(existing.targetRoot as 'fotos' | 'videos'), existing.targetRelPath);
       if (await pathExists(targetAbs)) {
         reportBirthtimeAnomaly(existing.id, file, birthMs, report);
+        perfLog('upload', file.relPath, perf, 'already-transferred');
         return {
           fileId: existing.id,
           reason: 'already-transferred',
@@ -240,13 +263,13 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
   if (!reusable || (existing != null && existing.meta == null)) {
     // Metadaten nachlesen, wenn die Datei noch keinen Blob hat (Backfill vor meta_json).
     if (fileType === 'image') {
-      const m = await readImageMeta(file.absPath);
+      const m = await perfMark(perf, 'exif', () => readImageMeta(file.absPath));
       make = m.make;
       model = m.model;
       metaDate = m.takenAt;
       meta = m.meta;
     } else {
-      const m = await readVideoMeta(file.absPath);
+      const m = await perfMark(perf, 'exif', () => readVideoMeta(file.absPath));
       make = m.make;
       model = m.model;
       metaDate = m.takenAt;
@@ -255,26 +278,28 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
   }
 
   /* ---- device resolution ---- */
-  const deviceResolution = resolveDevice({ filename: originalName, exifMake: make, exifModel: model, exifRaw: null, relDir });
-  const fileId = existing?.id ?? upsertFile({ ...baseFields(file, fileType, ext, originalName, nowMtime, isWhatsApp), hash, md5, make, model, status: 'pending', meta });
-  if (existing) updateFile(fileId, { make, model, hash, md5, isWhatsApp, meta });
-  enqueueThumbnail(fileId);
+  const deviceResolution = await perfMark(perf, 'device', () => resolveDevice({ filename: originalName, exifMake: make, exifModel: model, exifRaw: null, relDir }));
+  const fileId = existing?.id ?? await perfMark(perf, 'db', () => upsertFile({ ...baseFields(file, fileType, ext, originalName, nowMtime, isWhatsApp), hash, md5, make, model, status: 'pending', meta }));
+  if (existing) await perfMark(perf, 'db', () => updateFile(fileId, { make, model, hash, md5, isWhatsApp, meta }));
+  await perfMark(perf, 'thumb', () => enqueueThumbnail(fileId));
 
   if (!deviceResolution.device) {
     const hasExifInfo = !!(make || model);
     // Nested upload folders (person/device, e.g. "Guido/Sony Alpha 6400") without EXIF
     // are offered as path candidates on the device page – not as a problem.
     const pathCandidate = !hasExifInfo && deviceResolution.pathInfo.person != null;
-    if (!hasExifInfo && !pathCandidate) {
-      const raw = deviceResolution.raw ?? 'unbekannt';
-      report(fileId, 'UNKNOWN_DEVICE', `Kein Gerät für "${raw}" zugeordnet. Ohne Geräte-Zuordnung wird die Datei nicht übertragen.`);
-      return { fileId, reason: 'device', status: 'pending', hash, md5, targetInfo: null, targetAbs: null, takenAt: null, dateSource: 'file', deviceId: null, deviceRaw: null, make, model, fileType };
-    }
+      if (!hasExifInfo && !pathCandidate) {
+        const raw = deviceResolution.raw ?? 'unbekannt';
+        report(fileId, 'UNKNOWN_DEVICE', `Kein Gerät für "${raw}" zugeordnet. Ohne Geräte-Zuordnung wird die Datei nicht übertragen.`);
+        perfLog('upload', file.relPath, perf, 'device-blocked');
+        return { fileId, reason: 'device', status: 'pending', hash, md5, targetInfo: null, targetAbs: null, takenAt: null, dateSource: 'file', deviceId: null, deviceRaw: null, make, model, fileType };
+      }
     // EXIF-Geräteinfo oder Pfad-Kandidat: Keine Problem-Meldung – die Datei bleibt
     // blockiert (pending) und wird auf der Geräteseite als unbekanntes Gerät zum Übernehmen angeboten.
     const exifRaw = deviceResolution.raw ?? `${make ?? ''} ${model ?? ''}`.replace(/\s+/g, ' ').trim();
-    updateFile(fileId, { deviceRaw: exifRaw });
-    if (existing) resolveProblemsForFile(fileId, ['UNKNOWN_DEVICE']);
+    await perfMark(perf, 'db', () => updateFile(fileId, { deviceRaw: exifRaw }));
+    if (existing) await perfMark(perf, 'db', () => resolveProblemsForFile(fileId, ['UNKNOWN_DEVICE']));
+    perfLog('upload', file.relPath, perf, 'device-pending');
     return { fileId, reason: 'device', status: 'pending', hash, md5, targetInfo: null, targetAbs: null, takenAt: null, dateSource: 'file', deviceId: null, deviceRaw: exifRaw, make, model, fileType };
   }
 
@@ -321,6 +346,7 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
     const filenameDateIso = toLocalIso(filenameDate);
     if (differsByDay(takenAt, filenameDateIso)) {
       report(fileId, 'DATE_MISMATCH_FILENAME', `Datum im Dateinamen (${localDateKey(filenameDateIso)}) weicht vom ermittelten Datum (${localDateKey(takenAt)}) ab.`);
+      perfLog('upload', file.relPath, perf, 'filename-date');
       return { fileId, reason: 'filename-date', status: 'pending', hash, md5, targetInfo: null, targetAbs: null, takenAt, dateSource, deviceId: null, deviceRaw: null, make, model, fileType };
     }
   }
@@ -357,15 +383,19 @@ export async function evaluateFile(file: ScannedFile, cb: EvaluationCallbacks = 
     if (!targetInfo) {
       // Alle Namenskandidaten sind bereits vergeben.
       report(fileId, 'TARGET_EXISTS', `Zieldatei existiert bereits: ${last?.relPath}`);
+      perfLog('upload', file.relPath, perf, 'target-exists');
       return { fileId, reason: 'target-exists', status: 'pending', hash, md5, targetInfo: last, targetAbs: null, takenAt, dateSource, deviceId: null, deviceRaw: null, make, model, fileType };
     }
   } catch (err) {
     report(fileId, 'READ_ERROR', `Zielname konnte nicht erstellt werden: ${err instanceof Error ? err.message : String(err)}`);
+    perfLog('upload', file.relPath, perf, 'target-error');
     return { fileId, reason: 'target-exists', status: 'pending', hash, md5, targetInfo: null, targetAbs: null, takenAt, dateSource, deviceId: null, deviceRaw: null, make, model, fileType };
   }
 
   /* ---- ready ---- */
-  updateFile(fileId, { takenAt, dateSource, deviceId: deviceResolution.device.id, deviceRaw: deviceResolution.raw });
+  const device = deviceResolution.device;
+  await perfMark(perf, 'db', () => updateFile(fileId, { takenAt, dateSource, deviceId: device.id, deviceRaw: deviceResolution.raw }));
+  perfLog('upload', file.relPath, perf, 'ready');
   return {
     fileId,
     reason: 'ready',

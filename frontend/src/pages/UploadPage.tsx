@@ -45,7 +45,6 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { api } from '../api/client';
 import { useHashRoute } from '../hooks/useHashRoute';
-import { useActivity } from '../hooks/useActivity';
 import { MediaGallery, FileInfoCard, type SortKey, type SortDir } from '../components/MediaGallery';
 import { Thumbnail } from '../components/Thumbnail';
 import { RescanButton } from '../components/RescanButton';
@@ -93,7 +92,6 @@ export function UploadPage({ onOpenImage, onOpenDevice, onNavigate }: {
   const [ignoredDialog, setIgnoredDialog] = useState(false);
   const [ignoredItems, setIgnoredItems] = useState<IgnoredItem[]>([]);
   const [transferTarget, setTransferTarget] = useState<FileRecord | null>(null);
-  const busy = useActivity();
 
   const updateHash = useCallback((updates: Record<string, string | undefined>) => {
     const current: Record<string, string> = {};
@@ -110,6 +108,7 @@ export function UploadPage({ onOpenImage, onOpenDevice, onNavigate }: {
         status: status || undefined,
         type: type || undefined,
         search: search || undefined,
+        excludeUnsupported: true,
       };
       if (level === 'persons') {
         setGroups(await api.uploadGroups(1, common));
@@ -131,7 +130,7 @@ export function UploadPage({ onOpenImage, onOpenDevice, onNavigate }: {
 
   const filterActive = Boolean(status || type || search);
   const visibleGroups = filterActive ? groups.filter((g) => g.count > 0) : groups;
-  const rescanFilters = { status: status || undefined, type: type || undefined, search: search || undefined };
+  const rescanFilters = { status: status || undefined, type: type || undefined, search: search || undefined, excludeUnsupported: true };
 
   const loadFiles = useCallback(async () => {
     if (level !== 'files') return;
@@ -186,7 +185,7 @@ export function UploadPage({ onOpenImage, onOpenDevice, onNavigate }: {
 
   const startRescan = async (input: RescanInput) => {
     try {
-      const res = await api.startRescan(input);
+      const res = await api.startScan(input);
       if (!res.ok) {
         setError(res.error ?? 'Erneuter Scan konnte nicht gestartet werden.');
         return;
@@ -273,9 +272,8 @@ export function UploadPage({ onOpenImage, onOpenDevice, onNavigate }: {
           <GroupGrid
             groups={visibleGroups}
             icon={<PersonIcon />}
-            emptyText="Noch keine Dateien im Upload-Ordner. Führe zuerst einen Upload-Scan durch."
+            emptyText={filterActive ? 'Keine Treffer für diesen Filter.' : 'Noch keine Dateien im Upload-Ordner. Führe zuerst einen Upload-Scan durch.'}
             onPick={(key) => navigateDevices(key)}
-            rescanDisabled={busy}
             onRescan={(key) => startRescan({ upload: { person: key, ...rescanFilters } })}
             rescanTitle={(g) => `Alle Dateien von ${g.label} erneut scannen`}
           />
@@ -284,9 +282,8 @@ export function UploadPage({ onOpenImage, onOpenDevice, onNavigate }: {
           <GroupGrid
             groups={visibleGroups}
             icon={<PhotoCameraIcon />}
-            emptyText="Keine Geräte für diese Person gefunden."
+            emptyText={filterActive ? 'Keine Treffer für diesen Filter.' : 'Keine Geräte für diese Person gefunden.'}
             onPick={(key) => navigateYears(selectedPerson!, key)}
-            rescanDisabled={busy}
             onRescan={(key) => startRescan({ upload: { person: selectedPerson!, deviceKey: key, ...rescanFilters } })}
             rescanTitle={(g) => `Alle Dateien von ${g.label} erneut scannen`}
           />
@@ -295,9 +292,8 @@ export function UploadPage({ onOpenImage, onOpenDevice, onNavigate }: {
           <GroupGrid
             groups={visibleGroups}
             icon={<CalendarMonthIcon />}
-            emptyText="Keine Jahre für dieses Gerät gefunden."
+            emptyText={filterActive ? 'Keine Treffer für diesen Filter.' : 'Keine Jahre für dieses Gerät gefunden.'}
             onPick={(key) => navigateFiles(selectedPerson!, selectedDeviceKey!, key)}
-            rescanDisabled={busy}
             onRescan={(key) => startRescan({ upload: { person: selectedPerson!, deviceKey: selectedDeviceKey!, ...(key === 'Unbekannt' ? { yearNull: true } : { year: Number(key) }), ...rescanFilters } })}
             rescanTitle={(g) => `Alle Dateien von ${g.label} erneut scannen`}
           />
@@ -320,8 +316,7 @@ export function UploadPage({ onOpenImage, onOpenDevice, onNavigate }: {
                 onOpenDevice={onOpenDevice}
                 onToggleIgnore={handleToggleIgnoreFile}
                 onTransfer={setTransferTarget}
-                rescanDisabled={busy}
-                onRescanFile={(id) => startRescan({ fileIds: [id] })}
+                    onRescanFile={(id) => startRescan({ fileIds: [id] })}
               />
             )}
           />
@@ -369,12 +364,11 @@ export function UploadPage({ onOpenImage, onOpenDevice, onNavigate }: {
   );
 }
 
-function GroupGrid({ groups, icon, emptyText, onPick, rescanDisabled, onRescan, rescanTitle }: {
+function GroupGrid({ groups, icon, emptyText, onPick, onRescan, rescanTitle }: {
   groups: UploadGroup[];
   icon: React.ReactNode;
   emptyText: string;
   onPick: (key: string) => void;
-  rescanDisabled?: boolean;
   onRescan?: (key: string) => void;
   rescanTitle?: (group: UploadGroup) => string;
 }) {
@@ -385,7 +379,7 @@ function GroupGrid({ groups, icon, emptyText, onPick, rescanDisabled, onRescan, 
           <Card sx={{ position: 'relative' }}>
             {onRescan && (
               <Box sx={{ position: 'absolute', top: 6, right: 6, zIndex: 1 }}>
-                <RescanButton title={rescanTitle?.(g) ?? `Alle Dateien von ${g.label} erneut scannen`} disabled={rescanDisabled} onRescan={() => onRescan(g.key)} />
+                <RescanButton title={rescanTitle?.(g) ?? `Alle Dateien von ${g.label} erneut scannen`} onRescan={() => onRescan(g.key)} />
               </Box>
             )}
             <CardActionArea onClick={() => onPick(g.key)}>
@@ -397,7 +391,8 @@ function GroupGrid({ groups, icon, emptyText, onPick, rescanDisabled, onRescan, 
                 <Typography variant="caption" color="text.secondary" display="block" noWrap title={g.path} sx={{ mt: 0.5 }}>
                   {g.path}
                 </Typography>
-                <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+                <Stack direction="row" spacing={1} sx={{ mt: 0.5 }} flexWrap="wrap" useFlexGap>
+                  <Chip size="small" label={g.count === 1 ? '1 Datei' : `${g.count} Dateien`} variant="outlined" />
                   {g.images > 0 && <Chip size="small" label={`${g.images} Fotos`} color="primary" variant="outlined" />}
                   {g.videos > 0 && <Chip size="small" label={`${g.videos} Videos`} color="secondary" variant="outlined" />}
                 </Stack>
@@ -415,13 +410,12 @@ function GroupGrid({ groups, icon, emptyText, onPick, rescanDisabled, onRescan, 
   );
 }
 
-function UploadMediaTile({ file, onOpenImage, onOpenDevice, onToggleIgnore, onTransfer, rescanDisabled, onRescanFile }: {
+function UploadMediaTile({ file, onOpenImage, onOpenDevice, onToggleIgnore, onTransfer, onRescanFile }: {
   file: FileRecord;
   onOpenImage: (id: number) => void;
   onOpenDevice: (id: number) => void;
   onToggleIgnore: (path: string) => void;
   onTransfer: (file: FileRecord) => void;
-  rescanDisabled?: boolean;
   onRescanFile?: (id: number) => void;
 }) {
   const dName = fileDeviceName(file);
@@ -437,7 +431,7 @@ function UploadMediaTile({ file, onOpenImage, onOpenDevice, onToggleIgnore, onTr
             </Box>
           </Tooltip>
           {onRescanFile && (
-            <RescanButton title="Datei erneut scannen" disabled={rescanDisabled} onRescan={() => onRescanFile(file.id)} />
+            <RescanButton title="Datei erneut scannen" onRescan={() => onRescanFile(file.id)} />
           )}
           {file.status === 'pending' && (
             <Tooltip title="In Bibliothek übernehmen">

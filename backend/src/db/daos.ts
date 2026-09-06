@@ -96,13 +96,24 @@ export function getFileBySourcePath(root: string, sourceRelPath: string): FileRe
 }
 
 export function getUploadFileByHash(hash: string): FileRecord | null {
-  const row = getDb().prepare(`SELECT ${FILE_COLUMNS} FROM files f LEFT JOIN devices d ON d.id = f.device_id WHERE (f.hash = ? OR f.md5 = ?) AND f.source_root = 'upload' LIMIT 1`).get(hash, hash) as Row | undefined;
-  return row ? mapFile(row) : null;
+  // Wie getFileByHash: OR und source_root-Bedingung in SQL verhindern die
+  // Hash-Index-Nutzung – daher zwei Queries, Restprüfung in JS.
+  const byHash = getDb().prepare(`SELECT ${FILE_COLUMNS} FROM files f LEFT JOIN devices d ON d.id = f.device_id WHERE f.hash = ? LIMIT 1`).get(hash) as Row | undefined;
+  if (byHash && (byHash.source_root as string) === 'upload') return mapFile(byHash);
+  const byMd5 = getDb().prepare(`SELECT ${FILE_COLUMNS} FROM files f LEFT JOIN devices d ON d.id = f.device_id WHERE f.md5 = ? LIMIT 1`).get(hash) as Row | undefined;
+  if (byMd5 && (byMd5.source_root as string) === 'upload') return mapFile(byMd5);
+  return null;
 }
 
 export function getFileByHash(hash: string): FileRecord | null {
-  const row = getDb().prepare(`SELECT ${FILE_COLUMNS} FROM files f LEFT JOIN devices d ON d.id = f.device_id WHERE (f.hash = ? OR f.md5 = ?) AND f.status = 'transferred' LIMIT 1`).get(hash, hash) as Row | undefined;
-  return row ? mapFile(row) : null;
+  // Bewusst zwei Queries statt OR (OR verhindert idx_files_hash/idx_files_md5),
+  // und Status-Prüfung in JS statt SQL (sonst wählt der Planner idx_files_status
+  // mit 121k Zeilenvergleich). Beide Queries nutzen garantiert den Hash-Index.
+  const byHash = getDb().prepare(`SELECT ${FILE_COLUMNS} FROM files f LEFT JOIN devices d ON d.id = f.device_id WHERE f.hash = ? LIMIT 1`).get(hash) as Row | undefined;
+  if (byHash && (byHash.status as string) === 'transferred') return mapFile(byHash);
+  const byMd5 = getDb().prepare(`SELECT ${FILE_COLUMNS} FROM files f LEFT JOIN devices d ON d.id = f.device_id WHERE f.md5 = ? LIMIT 1`).get(hash) as Row | undefined;
+  if (byMd5 && (byMd5.status as string) === 'transferred') return mapFile(byMd5);
+  return null;
 }
 
 export function getFileByMd5(md5: string): FileRecord | null {
@@ -531,27 +542,163 @@ export function pendingScanCount(scanType: string): number {
   return (getDb().prepare('SELECT COUNT(*) AS c FROM scan_queue WHERE scan_type = ? AND done = 0').get(scanType) as Row).c as number;
 }
 
-export interface IndexedFile {
+/* ---------- scan jobs (analyse-warteschlange, phase 2) ---------- */
+
+export type ScanJobStatus = 'queued' | 'running' | 'completed' | 'stopped' | 'aborted';
+
+export interface ScanJob {
   id: number;
-  sourceRoot: string;
-  relPath: string;
+  label: string;
+  status: ScanJobStatus;
+  total: number;
+  checked: number;
+  removed: number;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
-/** Get files with status='indexed' that need analysis (Phase 2). */
-export function nextIndexedFiles(sourceRoot: string, limit = 4, excludeIds?: Set<number>): IndexedFile[] {
-  if (excludeIds && excludeIds.size === 0) excludeIds = undefined;
-  if (excludeIds) {
-    const ids = Array.from(excludeIds);
-    const placeholders = ids.map(() => '?').join(',');
-    const rows = getDb().prepare(
-      `SELECT id, source_root, source_rel_path FROM files WHERE source_root = ? AND status = ? AND id NOT IN (${placeholders}) ORDER BY id LIMIT ?`
-    ).all(sourceRoot, 'indexed', ...ids, limit) as Row[];
-    return rows.map((r) => ({ id: r.id as number, sourceRoot: r.source_root as string, relPath: r.source_rel_path as string }));
+function mapScanJob(r: Row): ScanJob {
+  return {
+    id: r.id as number,
+    label: r.label as string,
+    status: r.status as ScanJobStatus,
+    total: (r.total as number) ?? 0,
+    checked: (r.checked as number) ?? 0,
+    removed: (r.removed as number) ?? 0,
+    createdAt: r.created_at as string,
+    startedAt: (r.started_at as string) ?? null,
+    finishedAt: (r.finished_at as string) ?? null,
+  };
+}
+
+/** Legt einen Analyse-Auftrag mit Dateiliste an (mehrere Aufträge möglich). */
+export function createScanJob(label: string, fileIds: number[]): ScanJob {
+  const db = getDb();
+  const clean = [...new Set(fileIds.filter((n) => Number.isInteger(n) && (n as number) > 0))] as number[];
+  const run = db.prepare('INSERT INTO scan_jobs (label, status, total) VALUES (?, \'queued\', ?)').run(label, clean.length);
+  const id = Number(run.lastInsertRowid);
+  const ins = db.prepare('INSERT OR IGNORE INTO scan_job_files (job_id, file_id) VALUES (?, ?)');
+  db.exec('BEGIN');
+  try {
+    for (let i = 0; i < clean.length; i += 500) {
+      for (const fid of clean.slice(i, i + 500)) ins.run(id, fid);
+    }
+    const total = (db.prepare('SELECT COUNT(*) AS c FROM scan_job_files WHERE job_id = ?').get(id) as Row).c as number;
+    db.prepare('UPDATE scan_jobs SET total = ? WHERE id = ?').run(total, id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
   }
+  return getScanJob(id)!;
+}
+
+export function getScanJob(id: number): ScanJob | null {
+  const row = getDb().prepare('SELECT * FROM scan_jobs WHERE id = ?').get(id) as Row | undefined;
+  return row ? mapScanJob(row) : null;
+}
+
+/** Offene Aufträge zuerst, dann neueste abgeschlossene (für die Anzeige). */
+export function listScanJobs(limit = 30): ScanJob[] {
   const rows = getDb().prepare(
-    'SELECT id, source_root, source_rel_path FROM files WHERE source_root = ? AND status = ? ORDER BY id LIMIT ?'
-  ).all(sourceRoot, 'indexed', limit) as Row[];
-  return rows.map((r) => ({ id: r.id as number, sourceRoot: r.source_root as string, relPath: r.source_rel_path as string }));
+    `SELECT * FROM scan_jobs ORDER BY CASE WHEN status IN ('queued','running') THEN 0 ELSE 1 END, id DESC LIMIT ?`
+  ).all(limit) as Row[];
+  return rows.map(mapScanJob);
+}
+
+/** Ältester wartender Auftrag (FIFO). */
+export function nextScanJob(): ScanJob | null {
+  const row = getDb().prepare(`SELECT * FROM scan_jobs WHERE status = 'queued' ORDER BY id ASC LIMIT 1`).get() as Row | undefined;
+  return row ? mapScanJob(row) : null;
+}
+
+export function updateScanJob(id: number, patch: { status?: ScanJobStatus; checked?: number; removed?: number; startedAt?: string | null; finishedAt?: string | null }): void {
+  const fields: string[] = [];
+  const values: Array<string | number | null> = [];
+  if (patch.status !== undefined) { fields.push('status = ?'); values.push(patch.status); }
+  if (patch.checked !== undefined) { fields.push('checked = ?'); values.push(patch.checked); }
+  if (patch.removed !== undefined) { fields.push('removed = ?'); values.push(patch.removed); }
+  if (patch.startedAt !== undefined) { fields.push('started_at = ?'); values.push(patch.startedAt); }
+  if (patch.finishedAt !== undefined) { fields.push('finished_at = ?'); values.push(patch.finishedAt); }
+  if (!fields.length) return;
+  values.push(id);
+  getDb().prepare(`UPDATE scan_jobs SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function deleteScanJob(id: number): void {
+  getDb().prepare('DELETE FROM scan_jobs WHERE id = ?').run(id);
+}
+
+/** Angehaltenen Auftrag wieder einreihen (übrige Dateien bleiben erhalten). */
+export function requeueScanJob(id: number): boolean {
+  const r = getDb().prepare(`UPDATE scan_jobs SET status = 'queued' WHERE id = ? AND status IN ('stopped','aborted')`).run(id);
+  return Number(r.changes) > 0;
+}
+
+/** Alle noch anstehenden Datei-IDs eines Auftrags (für den Worker-Pool). */
+export function listScanJobFiles(jobId: number): number[] {
+  const rows = getDb().prepare('SELECT file_id FROM scan_job_files WHERE job_id = ? ORDER BY id ASC').all(jobId) as Row[];
+  return rows.map((r) => r.file_id as number);
+}
+
+/** Nächste zu verarbeitende Datei-IDs eines Auftrags (älteste zuerst). */
+export function takeScanJobFiles(jobId: number, limit: number): number[] {
+  const rows = getDb().prepare('SELECT file_id FROM scan_job_files WHERE job_id = ? ORDER BY id ASC LIMIT ?').all(jobId, limit) as Row[];
+  return rows.map((r) => r.file_id as number);
+}
+
+export function removeScanJobFiles(jobId: number, fileIds: number[]): void {
+  if (!fileIds.length) return;
+  const placeholders = fileIds.map(() => '?').join(',');
+  getDb().prepare(`DELETE FROM scan_job_files WHERE job_id = ? AND file_id IN (${placeholders})`).run(jobId, ...fileIds);
+}
+
+export function countScanJobFiles(jobId: number): number {
+  return (getDb().prepare('SELECT COUNT(*) AS c FROM scan_job_files WHERE job_id = ?').get(jobId) as Row).c as number;
+}
+
+/** Offene Aufträge + restliche Dateien (für die Kachel-Anzeige). */
+export function countOpenScanJobs(): { jobs: number; files: number } {
+  const db = getDb();
+  const jobs = (db.prepare(`SELECT COUNT(*) AS c FROM scan_jobs WHERE status IN ('queued','running')`).get() as Row).c as number;
+  const files = (db.prepare(`SELECT COUNT(*) AS c FROM scan_job_files WHERE job_id IN (SELECT id FROM scan_jobs WHERE status IN ('queued','running'))`).get() as Row).c as number;
+  return { jobs: jobs as number, files: files as number };
+}
+
+/** Abgeschlossene Aufträge über Limit hinaus löschen (Historie bleibt in transfer_runs). */
+export function pruneScanJobs(keep = 50): void {
+  getDb().prepare(
+    `DELETE FROM scan_jobs WHERE status IN ('completed','stopped','aborted') AND id NOT IN (
+       SELECT id FROM scan_jobs WHERE status IN ('completed','stopped','aborted') ORDER BY id DESC LIMIT ?
+     )`
+  ).run(keep);
+}
+
+/** Hängengebliebene Jobs ('running' aus abgestürztem Prozess) wieder freigeben. */
+export function recoverStuckScanJobs(): number {
+  const r = getDb().prepare(`UPDATE scan_jobs SET status = 'queued' WHERE status = 'running'`).run();
+  return Number(r.changes);
+}
+
+/** Offene Arbeit eines Auftrags gruppiert (für Restzeit-Schätzung). */
+export function remainingScanWork(jobId: number): Array<{ fileType: string; count: number; bytes: number }> {
+  const rows = getDb().prepare(
+    `SELECT f.file_type AS file_type, COUNT(*) AS c, COALESCE(SUM(f.source_size), 0) AS bytes
+     FROM scan_job_files q JOIN files f ON f.id = q.file_id
+     WHERE q.job_id = ? GROUP BY f.file_type`
+  ).all(jobId) as Row[];
+  return rows.map((r) => ({ fileType: r.file_type as string, count: r.c as number, bytes: Number(r.bytes) }));
+}
+
+/** IDs aller noch zu analysierenden Dateien (Walk-Übergabe an die Analyse). */
+export function listIndexedFileIds(roots: Array<'upload' | 'fotos' | 'videos'>, excludeQueued = false): number[] {
+  const placeholders = roots.map(() => '?').join(',');
+  const queued = excludeQueued ? ' AND f.id NOT IN (SELECT file_id FROM scan_job_files)' : '';
+  const rows = getDb().prepare(
+    `SELECT f.id FROM files f WHERE f.source_root IN (${placeholders}) AND f.status = 'indexed'${queued} ORDER BY f.id`
+  ).all(...roots) as Row[];
+  return rows.map((r) => r.id as number);
 }
 
 /** Count files with status='indexed' that need analysis. */
@@ -1052,7 +1199,7 @@ export interface LibraryGroup {
   videos: number;
 }
 
-export function listLibraryGroups(opts: { status?: string; type?: string; search?: string } = {}): LibraryGroup[] {
+export function listLibraryGroups(opts: { status?: string; type?: string; search?: string; excludeUnsupported?: boolean } = {}): LibraryGroup[] {
   const where = [`source_root IN ('fotos','videos')`, `taken_at IS NOT NULL`];
   const params: Array<string | number> = [];
   if (opts.status) { where.push('status = ?'); params.push(opts.status); }
@@ -1062,6 +1209,8 @@ export function listLibraryGroups(opts: { status?: string; type?: string; search
     const like = `%${opts.search}%`;
     params.push(like, like);
   }
+  // Gleicher Scope wie die Datei-Ansicht: unsupported wird niemals mitgezählt.
+  if (opts.excludeUnsupported) { where.push('ext NOT IN (SELECT ext FROM formats WHERE supported = 0)'); }
   const whereSql = `WHERE ${where.join(' AND ')}`;
   const rows = getDb().prepare(`
     SELECT CAST(substr(taken_at,1,4) AS INTEGER) AS year,
@@ -1093,6 +1242,7 @@ export function listLibraryGroups(opts: { status?: string; type?: string; search
     const like = `%${opts.search}%`;
     noYearParams.push(like, like);
   }
+  if (opts.excludeUnsupported) { noYearWhere.push('ext NOT IN (SELECT ext FROM formats WHERE supported = 0)'); }
   const noYear = getDb().prepare(`
     SELECT COUNT(*) AS count,
            SUM(CASE WHEN file_type = 'image' THEN 1 ELSE 0 END) AS images,
@@ -1121,6 +1271,7 @@ export function listLibraryFiles(opts: {
   type?: string;
   status?: string;
   search?: string;
+  excludeUnsupported?: boolean;
   sort?: string;
   sortDir?: 'asc' | 'desc';
   limit: number;
@@ -1155,6 +1306,7 @@ export function listLibraryFiles(opts: {
     const like = `%${opts.search}%`;
     params.push(like, like, like);
   }
+  if (opts.excludeUnsupported) { where.push('f.ext NOT IN (SELECT ext FROM formats WHERE supported = 0)'); }
   const whereSql = `WHERE ${where.join(' AND ')}`;
   const total = (getDb().prepare(`SELECT COUNT(*) AS c FROM files f LEFT JOIN devices d ON d.id = f.device_id ${whereSql}`).get(...params) as Row).c as number;
   const sortCol = opts.sort === 'takenAt' ? 'f.taken_at' : opts.sort === 'originalName' ? 'f.original_name' : opts.sort === 'sourceSize' ? 'f.source_size' : opts.sort === 'status' ? 'f.status' : opts.sort === 'deviceName' ? 'COALESCE(d.mapped_name, \'\')' : 'f.taken_at';
@@ -1212,6 +1364,16 @@ export function listFormats(): { ext: string; count: number; supported: boolean 
     count: r.count as number,
     supported: (r.supported as number) === 1,
   }));
+}
+
+/**
+ * Zählt alle Formate anhand der files-Tabelle neu und entfernt leere Einträge.
+ * Heilt Drift (z. B. nach Löschungen durch Scan oder manuelle Eingriffe).
+ */
+export function refreshFormatCounts(): void {
+  const db = getDb();
+  db.prepare('UPDATE formats SET count = (SELECT COUNT(*) FROM files f WHERE f.ext = formats.ext)').run();
+  db.prepare('DELETE FROM formats WHERE count = 0').run();
 }
 
 /* ---------- ignored files / folders ---------- */
@@ -1322,7 +1484,7 @@ function resolvePath(f: Row, level: 1 | 2 | 3): string {
   return parts[0] + '/' + resolveDeviceName(f) + '/' + resolveYear(f);
 }
 
-export function listUploadHierarchy(level: 1 | 2 | 3, filters: { person?: string; deviceKey?: string; status?: string; type?: string; search?: string } = {}): UploadGroup[] {
+export function listUploadHierarchy(level: 1 | 2 | 3, filters: { person?: string; deviceKey?: string; status?: string; type?: string; search?: string; excludeUnsupported?: boolean } = {}): UploadGroup[] {
   const db = getDb();
   const ignoredFiles = db.prepare('SELECT path FROM ignored WHERE scope = \'file\'').all() as Row[];
   const ignoredFolders = db.prepare('SELECT path FROM ignored WHERE scope = \'folder\'').all() as Row[];
@@ -1356,6 +1518,8 @@ export function listUploadHierarchy(level: 1 | 2 | 3, filters: { person?: string
     const like = `%${filters.search}%`;
     params.push(like, like);
   }
+  // Gleicher Scope wie die Datei-Ansicht (UploadPage filtert unsupported immer aus).
+  if (filters.excludeUnsupported) { where.push('f.ext NOT IN (SELECT ext FROM formats WHERE supported = 0)'); }
 
   const files = db.prepare(`
     SELECT f.source_rel_path, f.original_name, f.file_type, f.status, f.taken_at, f.device_id,

@@ -13,7 +13,7 @@ import {
   getScanProgress,
   clearScanProgress,
   resetScanQueue,
-  indexedCount,
+  listIndexedFileIds,
   createBatchUpsert,
   flushFormats,
   startRun,
@@ -21,7 +21,7 @@ import {
 } from '../db/daos.js';
 import { hashFile } from './hash.js';
 import { readImageMeta, readVideoMeta } from './metadata.js';
-import { resolveByExif, resolveByFilename, cacheDevices, clearDeviceCache } from './devices.js';
+import { resolveByExif, resolveByFilename } from './devices.js';
 import { detectFileType, extOf } from './naming.js';
 import { parseDateFromFilename, toLocalIso, differsByDay, localDateKey, isWhatsAppFilename } from './dates.js';
 import { walkTree, type ScannedFile } from './scanner.js';
@@ -31,19 +31,15 @@ import { isSupportedExt, type FileRecord, type ProblemType } from '../types.js';
 import { tryAcquire, release } from './active.js';
 import { scanPace } from './pace.js';
 import { logger } from '../db/logger.js';
-import { runAnalyzePhase as runAnalyzePhaseShared } from './analyzePhase.js';
+import { enqueueScan } from './analyze.js';
+import { perfStart, perfMark, perfLog, type FilePerf } from './perf.js';
 
 export interface TargetScanState {
   status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
   runId: number | null;
-  phase: 'walk' | 'analyze';
   totalDirs: number;
   totalFiles: number;
   scanned: number;
-  indexed: number;
-  analyzed: number;
-  linked: number;
-  newFiles: number;
   problems: number;
   currentFile: string | null;
   currentDirs: string[];
@@ -55,14 +51,9 @@ export interface TargetScanState {
 const state: TargetScanState = {
   status: 'idle',
   runId: null,
-  phase: 'walk',
   totalDirs: 0,
   totalFiles: 0,
   scanned: 0,
-  indexed: 0,
-  analyzed: 0,
-  linked: 0,
-  newFiles: 0,
   problems: 0,
   currentFile: null,
   currentDirs: [],
@@ -115,46 +106,32 @@ export function startTargetScan(opts?: { resume?: boolean }): { ok: boolean; err
       const run = p.runId != null ? { id: p.runId } : startRun('targetScan');
       state.status = 'running';
       state.runId = run.id;
-      state.phase = p.current?.startsWith(ANALYZE_MARKER) ? 'analyze' : 'walk';
       state.totalDirs = p.totalDirs;
       state.totalFiles = p.totalFiles;
       state.scanned = p.scanned;
-      state.indexed = 0;
-      state.analyzed = 0;
-      // Im Analyse-Phase die tatsaechliche Anzahl indexierter Datei aus der DB neu zaehlen
-      if (state.phase === 'analyze') {
-        for (const r of ['fotos', 'videos'] as const) state.indexed += indexedCount(r);
-      }
-      state.linked = p.linked;
-      state.newFiles = p.newFilesCount;
       state.problems = p.problems;
       state.currentFile = null;
       state.currentDirs = [];
       state.errors = [];
       state.startedAt = p.startedAt;
       state.finishedAt = null;
-      logger.info('scan', `Zielordner-Scan wird fortgesetzt (Phase: ${state.phase}, ${p.scanned} gescannt, ${p.linked} verknüpft, ${p.newFilesCount} neu).`);
+      logger.info('scan', `Zielordner-Indexierung wird fortgesetzt (${p.scanned} gescannt).`);
     } else {
       resetScanQueue('target');
       const run = startRun('targetScan');
-      saveScanProgress('target', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, linked: 0, newFilesCount: 0, problems: 0, current: null, runId: run.id });
+      saveScanProgress('target', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, problems: 0, current: null, runId: run.id });
       state.status = 'running';
       state.runId = run.id;
-      state.phase = 'walk';
       state.totalDirs = 0;
       state.totalFiles = 0;
       state.scanned = 0;
-      state.indexed = 0;
-      state.analyzed = 0;
-      state.linked = 0;
-      state.newFiles = 0;
       state.problems = 0;
       state.currentFile = null;
       state.currentDirs = [];
       state.errors = [];
       state.startedAt = new Date().toISOString();
       state.finishedAt = null;
-      logger.info('scan', 'Zielordner-Scan gestartet.');
+      logger.info('scan', 'Zielordner-Indexierung gestartet.');
     }
     void runTargetScanInternal(resume);
     return { ok: true };
@@ -175,13 +152,11 @@ function persistTargetProgress(current: string | null): void {
     totalDirs: state.totalDirs,
     totalFiles: state.totalFiles,
     scanned: state.scanned,
-    linked: state.linked,
-    newFilesCount: state.newFiles,
     problems: state.problems,
     current,
   });
   if (state.runId != null) {
-    updateRun(state.runId, { totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, transferred: state.linked, newFiles: state.newFiles, problems: state.problems });
+    updateRun(state.runId, { totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, problems: state.problems });
   }
 }
 
@@ -191,15 +166,15 @@ function finishTargetScan(): void {
   state.finishedAt = new Date().toISOString();
   const finished = state.status === 'completed' ? 'completed' : state.status === 'stopped' ? 'stopped' : 'aborted';
   if (state.runId != null) {
-    updateRun(state.runId, { status: finished, totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, transferred: state.linked, newFiles: state.newFiles, problems: state.problems });
+    updateRun(state.runId, { status: finished, totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, problems: state.problems });
     state.runId = null;
   }
   if (state.status === 'completed') {
     clearScanProgress('target');
-    logger.info('scan', `Zielordner-Scan abgeschlossen: ${state.scanned} gescannt, ${state.linked} verknüpft, ${state.newFiles} neu, ${state.problems} Probleme.`);
+    logger.info('scan', `Zielordner-Indexierung abgeschlossen: ${state.scanned} gescannt, ${state.problems} Probleme.`);
   } else {
-    saveScanProgress('target', { status: finished, finishedAt: new Date().toISOString(), linked: state.linked, newFilesCount: state.newFiles, problems: state.problems });
-    logger.warn('scan', `Zielordner-Scan beendet (${finished}): ${state.scanned} gescannt, ${state.linked} verknüpft.`);
+    saveScanProgress('target', { status: finished, finishedAt: new Date().toISOString(), problems: state.problems });
+    logger.warn('scan', `Zielordner-Indexierung beendet (${finished}): ${state.scanned} gescannt.`);
   }
   release('targetScan');
 }
@@ -296,8 +271,9 @@ async function runWalkPhase(roots: readonly ('fotos' | 'videos')[], resume: bool
   return !abortRequested;
 }
 
-function reportProblem(fileId: number, type: ProblemType, message: string, onProblem?: (fileId: number, type: ProblemType, message: string, isNew: boolean) => void): void {
+function reportProblem(fileId: number, type: ProblemType, message: string, onProblem?: (fileId: number, type: ProblemType, message: string, isNew: boolean) => void, perf?: FilePerf): void {
   const def = problemTypeDef(type);
+  const tDb = performance.now();
   const { active } = upsertProblem({
     fileId,
     type,
@@ -305,6 +281,7 @@ function reportProblem(fileId: number, type: ProblemType, message: string, onPro
     message,
     actionType: def.actions[0]?.id ?? null,
   });
+  if (perf) perf.db += performance.now() - tDb;
   if (active) state.problems++;
   onProblem?.(fileId, type, message, active);
 }
@@ -316,6 +293,7 @@ export async function analyzeLibraryFile(
   file: ScannedFile,
   onProblem?: (fileId: number, type: ProblemType, message: string, isNew: boolean) => void,
 ): Promise<void> {
+  const perf = perfStart();
   const existing = getFileBySourcePath(root, file.relPath);
   const originalName = path.basename(file.absPath);
   const ext = extOf(originalName);
@@ -323,13 +301,21 @@ export async function analyzeLibraryFile(
   const reusable = existing != null && existing.sourceSize === file.size && existing.sourceMtime === nowMtime;
 
   const fileType = detectFileType(ext);
-  if (!fileType || !isSupportedExt(ext)) return;
+  if (!fileType || !isSupportedExt(ext)) {
+    perfLog(root, file.relPath, perf, 'unsupported');
+    return;
+  }
 
   /* hash */
   let hash = reusable ? existing.hash : null;
   let md5 = reusable ? existing.md5 : null;
   if (!hash || !md5) {
+    const tRead = performance.now();
     const hashes = await hashFile(file.absPath);
+    const dtRead = performance.now() - tRead;
+    perf.read += dtRead;
+    perf.hash += dtRead;
+    perf.md5 += dtRead;
     if (!hash) hash = hashes.sha256;
     if (!md5) md5 = hashes.md5;
   }
@@ -341,13 +327,13 @@ export async function analyzeLibraryFile(
   let meta: Record<string, unknown> | null = existing?.meta ?? null;
   if (!reusable || (existing != null && existing.meta == null)) {
     if (fileType === 'image') {
-      const m = await readImageMeta(file.absPath);
+      const m = await perfMark(perf, 'exif', () => readImageMeta(file.absPath));
       make = m.make;
       model = m.model;
       metaDate = m.takenAt;
       meta = m.meta;
     } else if (fileType === 'video') {
-      const m = await readVideoMeta(file.absPath);
+      const m = await perfMark(perf, 'exif', () => readVideoMeta(file.absPath));
       make = m.make;
       model = m.model;
       metaDate = m.takenAt;
@@ -363,10 +349,10 @@ export async function analyzeLibraryFile(
   const dateSource: FileRecord['dateSource'] = metaDate ? (fileType === 'image' ? 'exif' : 'quicktime') : filenameDate ? 'filename' : 'file';
 
   /* device */
-  let devRes = resolveByExif(make, model);
-  if (!devRes.device) devRes = resolveByFilename(originalName);
+  let devRes = await perfMark(perf, 'device', () => resolveByExif(make, model));
+  if (!devRes.device) devRes = await perfMark(perf, 'device', () => resolveByFilename(originalName));
 
-  const fileId = existing?.id ?? upsertFile({
+  const fileId = existing?.id ?? await perfMark(perf, 'db', () => upsertFile({
     sourceRoot: root,
     hash,
     md5,
@@ -389,95 +375,64 @@ export async function analyzeLibraryFile(
     status: 'transferred',
     isWhatsApp,
     meta,
-  });
+  }));
   if (existing) {
-    updateFile(fileId, { hash, md5, make, model, deviceId: devRes.device?.id ?? null, deviceRaw: devRes.raw, takenAt, dateSource, status: 'transferred', isWhatsApp, meta });
+    await perfMark(perf, 'db', () => updateFile(fileId, { hash, md5, make, model, deviceId: devRes.device?.id ?? null, deviceRaw: devRes.raw, takenAt, dateSource, status: 'transferred', isWhatsApp, meta }));
   }
-  enqueueThumbnail(fileId);
+  await perfMark(perf, 'thumb', () => enqueueThumbnail(fileId));
 
   /* consistency checks */
   const reported = new Set<ProblemType>();
   if (birthMs != null && file.mtimeMs < birthMs - BIRTHTIME_TOLERANCE_MS) {
-    reportProblem(fileId, 'FILE_MTIME_BEFORE_BIRTHTIME', `Die Datei-Änderungszeit (${localDateKey(toLocalIso(new Date(file.mtimeMs)))}) liegt vor der Datei-Erstellzeit (${localDateKey(toLocalIso(new Date(birthMs)))}).`, onProblem);
+    reportProblem(fileId, 'FILE_MTIME_BEFORE_BIRTHTIME', `Die Datei-Änderungszeit (${localDateKey(toLocalIso(new Date(file.mtimeMs)))}) liegt vor der Datei-Erstellzeit (${localDateKey(toLocalIso(new Date(birthMs)))}).`, onProblem, perf);
     reported.add('FILE_MTIME_BEFORE_BIRTHTIME');
   }
   if (metaDate && filenameDate && differsByDay(metaDate, toLocalIso(filenameDate))) {
-    reportProblem(fileId, 'LIBRARY_META_FILENAME_MISMATCH', `Meta-Datum (${localDateKey(metaDate)}) weicht vom Dateinamen-Datum (${localDateKey(toLocalIso(filenameDate))}) ab.`, onProblem);
+    reportProblem(fileId, 'LIBRARY_META_FILENAME_MISMATCH', `Meta-Datum (${localDateKey(metaDate)}) weicht vom Dateinamen-Datum (${localDateKey(toLocalIso(filenameDate))}) ab.`, onProblem, perf);
     reported.add('LIBRARY_META_FILENAME_MISMATCH');
   }
   if (metaDate && differsByDay(metaDate, fileDateIso)) {
-    reportProblem(fileId, 'LIBRARY_META_FILETIME_MISMATCH', `Meta-Datum (${localDateKey(metaDate)}) weicht von der Datei-Erstellzeit (${localDateKey(fileDateIso)}) ab.`, onProblem);
+    reportProblem(fileId, 'LIBRARY_META_FILETIME_MISMATCH', `Meta-Datum (${localDateKey(metaDate)}) weicht von der Datei-Erstellzeit (${localDateKey(fileDateIso)}) ab.`, onProblem, perf);
     reported.add('LIBRARY_META_FILETIME_MISMATCH');
   }
   if (!metaDate && filenameDate && differsByDay(toLocalIso(filenameDate), fileDateIso)) {
-    reportProblem(fileId, 'LIBRARY_FILENAME_FILETIME_MISMATCH', `Dateinamen-Datum (${localDateKey(toLocalIso(filenameDate))}) weicht von der Datei-Erstellzeit (${localDateKey(fileDateIso)}) ab.`, onProblem);
+    reportProblem(fileId, 'LIBRARY_FILENAME_FILETIME_MISMATCH', `Dateinamen-Datum (${localDateKey(toLocalIso(filenameDate))}) weicht von der Datei-Erstellzeit (${localDateKey(fileDateIso)}) ab.`, onProblem, perf);
     reported.add('LIBRARY_FILENAME_FILETIME_MISMATCH');
   }
   const pathDate = dateFromLibraryPath(file.relPath);
   if (pathDate && differsByDay(pathDate, takenAt)) {
-    reportProblem(fileId, 'LIBRARY_PATH_MISMATCH', `Zielordner (${pathDate}) passt nicht zum ermittelten Datum (${localDateKey(takenAt)}).`, onProblem);
+    reportProblem(fileId, 'LIBRARY_PATH_MISMATCH', `Zielordner (${pathDate}) passt nicht zum ermittelten Datum (${localDateKey(takenAt)}).`, onProblem, perf);
     reported.add('LIBRARY_PATH_MISMATCH');
   }
 
   /* resolve library problems that no longer apply */
   if (reported.size > 0) {
     const typesToResolve = LIBRARY_PROBLEM_TYPES.filter((t) => !reported.has(t));
-    if (typesToResolve.length) resolveProblemsForFile(fileId, typesToResolve);
+    if (typesToResolve.length) await perfMark(perf, 'db', () => resolveProblemsForFile(fileId, typesToResolve));
   }
 
   /* link matching upload file as imported */
   if (hash) {
-    const uploadRec = getUploadFileByHash(hash);
+    const uploadRec = await perfMark(perf, 'db', () => getUploadFileByHash(hash));
     if (uploadRec && uploadRec.status !== 'transferred') {
-      updateFile(uploadRec.id, {
+      await perfMark(perf, 'db', () => updateFile(uploadRec.id, {
         status: 'transferred',
         targetRoot: root,
         targetRelPath: file.relPath,
         transferredAt: new Date().toISOString(),
-      });
-      state.linked++;
-    } else if (!uploadRec) {
-      state.newFiles++;
+      }));
     }
   }
-}
-
-/** Phase 2: Analyze indexed files (hash, EXIF, device, consistency, linking). */
-async function runAnalyzePhase(roots: readonly ('fotos' | 'videos')[]): Promise<void> {
-  cacheDevices();
-
-  await runAnalyzePhaseShared([...roots], {
-    shouldAbort: () => abortRequested,
-    onFile: async (item, file) => {
-      const root = item.sourceRoot as 'fotos' | 'videos';
-      const base = rootBase(root);
-      state.currentFile = `${root}/${item.relPath}`;
-      await analyzeLibraryFile(root, base, file);
-    },
-    onProgress: (analyzed) => {
-      state.analyzed = analyzed;
-      if (analyzed % 20 === 0) {
-        let totalIndexed = 0;
-        for (const root of roots) totalIndexed += indexedCount(root);
-        state.indexed = totalIndexed;
-        persistTargetProgress(`${ANALYZE_MARKER}:${analyzed}`);
-      }
-    },
-    onError: (msg) => {
-      state.errors.push(msg);
-      logger.error('scan', msg);
-    },
-    onScanned: () => { state.scanned++; },
-  });
-
-  clearDeviceCache();
+  perfLog(root, file.relPath, perf, 'ready');
 }
 
 async function runTargetScanInternal(resume: boolean): Promise<void> {
   const roots = ['fotos', 'videos'] as const;
   try {
-    // Phase 1: Walk (if not already done)
-    if (state.phase === 'walk') {
+    // Indexierung überspringen, wenn ein früherer Lauf bereits analysiert
+    // (der Walk ist dann längst fertig, nur die Analyse steht noch aus).
+    const skipWalk = resume && (getScanProgress('target')?.current ?? '').startsWith(ANALYZE_MARKER);
+    if (!skipWalk) {
       const t0 = Date.now();
       const walkOk = await runWalkPhase(roots, resume);
       const walkMs = Date.now() - t0;
@@ -487,24 +442,16 @@ async function runTargetScanInternal(resume: boolean): Promise<void> {
         finishTargetScan();
         return;
       }
-      state.phase = 'analyze';
-      let totalIndexed = 0;
-      for (const root of roots) totalIndexed += indexedCount(root);
-      state.indexed = totalIndexed;
-      state.analyzed = 0;
-      if (totalIndexed === 0) {
-        state.status = 'completed';
-        finishTargetScan();
-        return;
-      }
     }
 
-    // Phase 2: Analyze
-    const t1 = Date.now();
-    await runAnalyzePhase(roots);
-    const analyzeMs = Date.now() - t1;
-    const rate = state.analyzed > 0 ? Math.round(state.analyzed / (analyzeMs / 1000)) : 0;
-    logger.info('scan', `[TRACE] Zielordner Analyse: ${analyzeMs}ms, ${state.analyzed} Dateien analysiert, ${rate} Dateien/s`);
+    // Indexierung fertig → Analyse als Scan-Auftrag einreihen (eigener Prozess in der Scan-Kachel).
+    const ids = listIndexedFileIds([...roots], true);
+    if (ids.length > 0) {
+      const job = enqueueScan(`Zielordner-Analyse (${ids.length.toLocaleString('de-DE')} Dateien)`, ids);
+      logger.info('scan', `Zielordner-Indexierung abgeschlossen: ${ids.length.toLocaleString('de-DE')} Dateien zur Analyse eingereiht (Auftrag #${job.id}).`);
+    } else {
+      logger.info('scan', 'Zielordner-Indexierung abgeschlossen: keine neuen Dateien zu analysieren.');
+    }
 
     if (abortRequested && state.status !== 'stopped') state.status = 'aborted';
     else if (state.status !== 'stopped') state.status = 'completed';
@@ -512,7 +459,7 @@ async function runTargetScanInternal(resume: boolean): Promise<void> {
     state.status = 'aborted';
     const msg = err instanceof Error ? err.message : String(err);
     state.errors.push(msg);
-    logger.error('scan', `Zielordner-Scan fehlgeschlagen: ${msg}`);
+    logger.error('scan', `Zielordner-Indexierung fehlgeschlagen: ${msg}`);
   }
   finishTargetScan();
 }

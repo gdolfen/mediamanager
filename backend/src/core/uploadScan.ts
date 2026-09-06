@@ -2,39 +2,33 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { rootBase } from '../db/database.js';
 import {
-  getFileBySource,
   saveScanProgress,
   getScanProgress,
   clearScanProgress,
   resetScanQueue,
-  indexedCount,
+  listIndexedFileIds,
   createBatchUpsert,
   flushFormats,
   startRun,
   updateRun,
 } from '../db/daos.js';
 import { scanUpload } from './scanner.js';
-import { evaluateFile, isSettledFile } from './evaluator.js';
-import { cacheDevices, clearDeviceCache } from './devices.js';
 import { validatePaths } from './transfer.js';
 import { tryAcquire, release } from './active.js';
 import { detectFileType, extOf } from './naming.js';
 import { isWhatsAppFilename } from './dates.js';
 import { isSupportedExt } from '../types.js';
-import { runAnalyzePhase as runAnalyzePhaseShared } from './analyzePhase.js';
+import { enqueueScan, kickScanWorker } from './analyze.js';
 import { scanPace } from './pace.js';
 import { logger } from '../db/logger.js';
 
 export interface UploadScanState {
   status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
   runId: number | null;
-  phase: 'walk' | 'analyze';
   totalDirs: number;
   totalFiles: number;
   scanned: number;
   indexed: number;
-  analyzed: number;
-  skipped: number;
   problems: number;
   currentFile: string | null;
   currentDirs: string[];
@@ -46,13 +40,10 @@ export interface UploadScanState {
 const state: UploadScanState = {
   status: 'idle',
   runId: null,
-  phase: 'walk',
   totalDirs: 0,
   totalFiles: 0,
   scanned: 0,
   indexed: 0,
-  analyzed: 0,
-  skipped: 0,
   problems: 0,
   currentFile: null,
   currentDirs: [],
@@ -102,44 +93,34 @@ export function startUploadScan(opts?: { resume?: boolean }): { ok: boolean; err
       const run = p.runId != null ? { id: p.runId } : startRun('uploadScan');
       state.status = 'running';
       state.runId = run.id;
-      state.phase = p.current?.startsWith(ANALYZE_MARKER) ? 'analyze' : 'walk';
       state.totalDirs = p.totalDirs;
       state.totalFiles = p.totalFiles;
       state.scanned = p.scanned;
       state.indexed = p.indexed;
-      state.analyzed = 0;
-      // Im Analyse-Phase die tatsaechliche Anzahl indexierter Datei aus der DB neu zaehlen
-      if (state.phase === 'analyze') {
-        state.indexed = indexedCount('upload');
-      }
-      state.skipped = p.skipped;
       state.problems = p.problems;
       state.currentFile = null;
       state.currentDirs = [];
       state.errors = [];
       state.startedAt = p.startedAt;
       state.finishedAt = null;
-      logger.info('scan', `Upload-Scan wird fortgesetzt (Phase: ${state.phase}, ${p.scanned} gescannt, ${p.indexed} indexiert, ${p.skipped} übersprungen).`);
+      logger.info('scan', `Upload-Indexierung wird fortgesetzt (${p.scanned} gescannt, ${p.indexed} indexiert).`);
     } else {
       resetScanQueue('upload');
       const run = startRun('uploadScan');
-      saveScanProgress('upload', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, indexed: 0, skipped: 0, problems: 0, current: null, runId: run.id });
+      saveScanProgress('upload', { status: 'running', startedAt: new Date().toISOString(), totalDirs: 0, totalFiles: 0, scanned: 0, indexed: 0, problems: 0, current: null, runId: run.id });
       state.status = 'running';
       state.runId = run.id;
-      state.phase = 'walk';
       state.totalDirs = 0;
       state.totalFiles = 0;
       state.scanned = 0;
       state.indexed = 0;
-      state.analyzed = 0;
-      state.skipped = 0;
       state.problems = 0;
       state.currentFile = null;
       state.currentDirs = [];
       state.errors = [];
       state.startedAt = new Date().toISOString();
       state.finishedAt = null;
-      logger.info('scan', 'Upload-Scan gestartet.');
+      logger.info('scan', 'Upload-Indexierung gestartet.');
     }
     void runUploadScanInternal(resume);
     return { ok: true };
@@ -161,12 +142,11 @@ function persistUploadProgress(current: string | null): void {
     totalFiles: state.totalFiles,
     scanned: state.scanned,
     indexed: state.indexed,
-    skipped: state.skipped,
     problems: state.problems,
     current,
   });
   if (state.runId != null) {
-    updateRun(state.runId, { totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, indexed: state.indexed, skipped: state.skipped, problems: state.problems });
+    updateRun(state.runId, { totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, indexed: state.indexed, problems: state.problems });
   }
 }
 
@@ -176,15 +156,15 @@ function finishUploadScan(resultDirs: number, resultFiles: number): void {
   state.finishedAt = new Date().toISOString();
   const finished = state.status === 'completed' ? 'completed' : state.status === 'stopped' ? 'stopped' : 'aborted';
   if (state.runId != null) {
-    updateRun(state.runId, { status: finished, totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, indexed: state.indexed, skipped: state.skipped, problems: state.problems });
+    updateRun(state.runId, { status: finished, totalDirs: state.totalDirs, totalFiles: state.totalFiles, scanned: state.scanned, indexed: state.indexed, problems: state.problems });
     state.runId = null;
   }
   if (state.status === 'completed') {
     clearScanProgress('upload');
-    logger.info('scan', `Upload-Scan abgeschlossen: ${resultDirs} Ordner, ${resultFiles} Dateien, ${state.scanned} gescannt, ${state.indexed} indexiert, ${state.analyzed} analysiert, ${state.skipped} übersprungen, ${state.problems} Probleme.`);
+    logger.info('scan', `Upload-Indexierung abgeschlossen: ${resultDirs} Ordner, ${resultFiles} Dateien, ${state.scanned} gescannt, ${state.indexed} indexiert, ${state.problems} Probleme.`);
   } else {
-    saveScanProgress('upload', { status: finished, finishedAt: new Date().toISOString(), indexed: state.indexed, skipped: state.skipped, problems: state.problems });
-    logger.warn('scan', `Upload-Scan beendet (${finished}): ${state.scanned} gescannt, ${state.indexed} indexiert, ${state.analyzed} analysiert, ${state.skipped} übersprungen.`);
+    saveScanProgress('upload', { status: finished, finishedAt: new Date().toISOString(), indexed: state.indexed, problems: state.problems });
+    logger.warn('scan', `Upload-Indexierung beendet (${finished}): ${state.scanned} gescannt, ${state.indexed} indexiert.`);
   }
   release('uploadScan');
 }
@@ -257,48 +237,7 @@ async function runWalkPhase(uploadBase: string, resume: boolean): Promise<boolea
   flushFormats();
   state.totalDirs = result.dirs;
   state.totalFiles = result.files;
-  persistUploadProgress(`${ANALYZE_MARKER}:0`);
   return !abortRequested;
-}
-
-/** Phase 2: Analyze indexed files (hash, EXIF, device, thumbnail). */
-async function runAnalyzePhase(): Promise<void> {
-  cacheDevices();
-
-  await runAnalyzePhaseShared(['upload'], {
-    shouldAbort: () => abortRequested,
-    onFile: async (item, file) => {
-      state.currentFile = item.relPath;
-      const nowMtime = Math.floor(file.mtimeMs);
-      if (isSettledFile(getFileBySource(item.relPath), file.size, nowMtime)) {
-        state.skipped++;
-        return;
-      }
-      const evaluation = await evaluateFile(file, {
-        onProblem: (_fileId, _type, _message, isNew) => {
-          if (isNew) state.problems++;
-        },
-      });
-      if (evaluation.reason === 'duplicate' || evaluation.reason === 'already-transferred') {
-        state.skipped++;
-      } else {
-        state.analyzed++;
-      }
-    },
-    onProgress: (analyzed) => {
-      if (analyzed % 20 === 0) {
-        state.indexed = indexedCount('upload');
-        persistUploadProgress(`${ANALYZE_MARKER}:${analyzed}`);
-      }
-    },
-    onError: (msg) => {
-      state.errors.push(msg);
-      logger.error('scan', msg);
-    },
-    onScanned: () => { state.scanned++; },
-  });
-
-  clearDeviceCache();
 }
 
 async function runUploadScanInternal(resume: boolean): Promise<void> {
@@ -306,8 +245,10 @@ async function runUploadScanInternal(resume: boolean): Promise<void> {
   let resultDirs = 0;
   let resultFiles = 0;
   try {
-    // Phase 1: Walk (if not already done)
-    if (state.phase === 'walk') {
+    // Indexierung überspringen, wenn ein früherer Lauf bereits analysiert
+    // (der Walk ist dann längst fertig, nur die Analyse steht noch aus).
+    const skipWalk = resume && (getScanProgress('upload')?.current ?? '').startsWith(ANALYZE_MARKER);
+    if (!skipWalk) {
       const t0 = Date.now();
       const walkOk = await runWalkPhase(uploadBase, resume);
       const walkMs = Date.now() - t0;
@@ -317,22 +258,16 @@ async function runUploadScanInternal(resume: boolean): Promise<void> {
         finishUploadScan(resultDirs, resultFiles);
         return;
       }
-      state.phase = 'analyze';
-      state.indexed = indexedCount('upload');
-      state.analyzed = 0;
-      if (state.indexed === 0) {
-        state.status = 'completed';
-        finishUploadScan(resultDirs, resultFiles);
-        return;
-      }
     }
 
-    // Phase 2: Analyze
-    const t1 = Date.now();
-    await runAnalyzePhase();
-    const analyzeMs = Date.now() - t1;
-    const rate = state.analyzed > 0 ? Math.round(state.analyzed / (analyzeMs / 1000)) : 0;
-    logger.info('scan', `[TRACE] Analyse-Phase: ${analyzeMs}ms, ${state.analyzed} Dateien analysiert, ${rate} Dateien/s`);
+    // Indexierung fertig → Analyse als Scan-Auftrag einreihen (eigener Prozess in der Scan-Kachel).
+    const ids = listIndexedFileIds(['upload'], true);
+    if (ids.length > 0) {
+      const job = enqueueScan(`Upload-Analyse (${ids.length.toLocaleString('de-DE')} Dateien)`, ids);
+      logger.info('scan', `Upload-Indexierung abgeschlossen: ${ids.length.toLocaleString('de-DE')} Dateien zur Analyse eingereiht (Auftrag #${job.id}).`);
+    } else {
+      logger.info('scan', 'Upload-Indexierung abgeschlossen: keine neuen Dateien zu analysieren.');
+    }
 
     if (abortRequested && state.status !== 'stopped') state.status = 'aborted';
     else if (state.status !== 'stopped') state.status = 'completed';
@@ -340,7 +275,7 @@ async function runUploadScanInternal(resume: boolean): Promise<void> {
     state.status = 'aborted';
     const msg = err instanceof Error ? err.message : String(err);
     state.errors.push(msg);
-    logger.error('scan', `Upload-Scan fehlgeschlagen: ${msg}`);
+    logger.error('scan', `Upload-Indexierung fehlgeschlagen: ${msg}`);
   }
   finishUploadScan(resultDirs, resultFiles);
 }

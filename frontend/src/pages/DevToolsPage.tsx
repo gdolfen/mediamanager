@@ -197,7 +197,7 @@ function PerformanceStats() {
   const load = useCallback(async () => {
     try {
       const res = await api.logs({ level: undefined, page: 1, limit: 500 });
-      const perf = res.rows.filter((r) => r.source === 'scan' || r.source === 'transfer');
+      const perf = res.rows.filter((r) => r.source === 'scan' || r.source === 'transfer' || r.source === 'perf');
       setEntries(perf.map((r) => ({ ts: r.ts, source: r.source, message: r.message })));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

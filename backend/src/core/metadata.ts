@@ -11,7 +11,7 @@ export interface ImageMeta {
   takenAt: string | null;
   make: string | null;
   model: string | null;
-  /** Full metadata blob stored in the DB for later analysis without rescan. */
+  /** Full metadata blob stored in the DB for later analysis without re-scan. */
   meta: Record<string, unknown>;
 }
 
@@ -21,7 +21,7 @@ export interface VideoMeta {
   make: string | null;
   model: string | null;
   duration: number | null;
-  /** Full metadata blob stored in the DB for later analysis without rescan. */
+  /** Full metadata blob stored in the DB for later analysis without re-scan. */
   meta: Record<string, unknown>;
 }
 

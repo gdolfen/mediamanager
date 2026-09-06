@@ -185,15 +185,15 @@ export function SettingsPage({ onOpenFormat }: { onOpenFormat?: (ext: string) =>
               </TableHead>
               <TableBody>
                 {formats.map((f) => (
-                  <TableRow key={f.ext}>
+                  <TableRow key={f.ext === '' ? '_' : f.ext}>
                     <TableCell>
                       <Typography
                         component="span"
                         sx={{ fontFamily: 'monospace', cursor: 'pointer', '&:hover': { color: 'primary.main', textDecoration: 'underline' } }}
                         title="Alle Dateien dieses Formats anzeigen"
-                        onClick={() => onOpenFormat?.(f.ext)}
+                        onClick={() => onOpenFormat?.(f.ext === '' ? '_' : f.ext)}
                       >
-                        {f.ext}
+                        {f.ext === '' ? '_' : f.ext}
                       </Typography>
                     </TableCell>
                     <TableCell align="right">{f.count}</TableCell>

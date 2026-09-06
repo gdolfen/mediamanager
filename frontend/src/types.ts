@@ -26,14 +26,10 @@ export interface LibraryGroup {
 
 export interface TargetScanState {
   status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
-  phase: 'walk' | 'analyze';
+  runId: number | null;
   totalDirs: number;
   totalFiles: number;
   scanned: number;
-  indexed: number;
-  analyzed: number;
-  linked: number;
-  newFiles: number;
   problems: number;
   currentFile: string | null;
   currentDirs: string[];
@@ -45,13 +41,11 @@ export interface TargetScanState {
 
 export interface UploadScanState {
   status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
-  phase: 'walk' | 'analyze';
+  runId: number | null;
   totalDirs: number;
   totalFiles: number;
   scanned: number;
   indexed: number;
-  analyzed: number;
-  skipped: number;
   problems: number;
   currentFile: string | null;
   currentDirs: string[];
@@ -192,22 +186,51 @@ export interface RecheckState {
   finishedAt: string | null;
 }
 
-export interface RescanState {
-  status: 'idle' | 'running' | 'completed' | 'aborted' | 'stopped';
-  runId: number | null;
+export interface ActiveScanFile {
+  file: string;
+  sizeBytes: number | null;
+  startedAt: string;
+  etaMs: number;
+}
+
+export interface ScanJobInfo {
+  id: number;
+  label: string;
+  status: 'queued' | 'running' | 'completed' | 'stopped' | 'aborted';
   total: number;
   checked: number;
   removed: number;
-  currentFile: string | null;
-  errors: string[];
+  createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
 }
 
+export interface ScanWorkerState {
+  running: boolean;
+  current: {
+    id: number;
+    label: string;
+    total: number;
+    checked: number;
+    removed: number;
+    startedAt: string | null;
+  } | null;
+  activeFiles: ActiveScanFile[];
+  openJobs: number;
+  openFiles: number;
+  remainingMs: number | null;
+  errors: string[];
+  lastFinishedAt: string | null;
+  lastStatus: 'idle' | 'completed' | 'aborted' | 'stopped';
+  lastTotal: number;
+  lastChecked: number;
+  lastRemoved: number;
+}
+
 export interface RescanInput {
   fileIds?: number[];
-  upload?: { person?: string; deviceKey?: string; year?: number; yearNull?: boolean; status?: string; type?: string; search?: string };
-  library?: { year?: number; yearNull?: boolean; month?: number; day?: number; status?: string; type?: string; search?: string };
+  upload?: { person?: string; deviceKey?: string; year?: number; yearNull?: boolean; status?: string; type?: string; search?: string; excludeUnsupported?: boolean };
+  library?: { year?: number; yearNull?: boolean; month?: number; day?: number; status?: string; type?: string; search?: string; excludeUnsupported?: boolean };
 }
 
 export interface TransferState {
@@ -238,7 +261,7 @@ export interface TransferredCheckState {
   finishedAt: string | null;
 }
 
-export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck' | 'rescan' | 'transferredCheck';
+export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck' | 'scan' | 'transferredCheck';
 
 export interface RunRecord {
   id: number;

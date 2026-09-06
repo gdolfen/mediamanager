@@ -23,11 +23,13 @@ export interface LogPage {
   offset: number;
 }
 
-export function log(level: LogLevel, source: string, message: string): void {
+export function log(level: LogLevel, source: string, message: string, opts?: { console?: boolean }): void {
   const line = `[${level.toUpperCase()}] ${source}: ${message}`;
-  if (level === 'error') console.error(line);
-  else if (level === 'warn') console.warn(line);
-  else console.log(line);
+  if (opts?.console ?? true) {
+    if (level === 'error') console.error(line);
+    else if (level === 'warn') console.warn(line);
+    else console.log(line);
+  }
   try {
     getDb().prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(level, source, message);
   } catch (err) {
@@ -36,9 +38,9 @@ export function log(level: LogLevel, source: string, message: string): void {
 }
 
 export const logger = {
-  info: (source: string, message: string) => log('info', source, message),
-  warn: (source: string, message: string) => log('warn', source, message),
-  error: (source: string, message: string) => log('error', source, message),
+  info: (source: string, message: string, opts?: { console?: boolean }) => log('info', source, message, opts),
+  warn: (source: string, message: string, opts?: { console?: boolean }) => log('warn', source, message, opts),
+  error: (source: string, message: string, opts?: { console?: boolean }) => log('error', source, message, opts),
 };
 
 export function listLogs(q: LogQuery = {}): LogPage {

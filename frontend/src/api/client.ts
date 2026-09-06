@@ -11,8 +11,9 @@ import type {
   Problem,
   RecheckState,
   RescanInput,
-  RescanState,
   RunRecord,
+  ScanJobInfo,
+  ScanWorkerState,
   ScheduleMode,
   ScheduleState,
   Settings,
@@ -110,9 +111,12 @@ export const api = {
   abortRecheck: () => request<{ ok: boolean }>('POST', '/problems/recheck/abort'),
   recheckStatus: () => request<RecheckState>('GET', '/problems/recheck/status'),
 
-  startRescan: (input: RescanInput) => request<{ ok: boolean; error?: string; total?: number }>('POST', '/rescan', input),
-  abortRescan: () => request<{ ok: boolean }>('POST', '/rescan/abort'),
-  rescanStatus: () => request<RescanState>('GET', '/rescan/status'),
+  startScan: (input: RescanInput) => request<{ ok: boolean; error?: string; jobId?: number; total?: number }>('POST', '/scan', input),
+  abortScan: () => request<{ ok: boolean }>('POST', '/scan/abort'),
+  scanStatus: () => request<ScanWorkerState>('GET', '/scan/status'),
+  scanJobs: () => request<ScanJobInfo[]>('GET', '/scan/jobs'),
+  resumeScanJob: (id: number) => request<{ ok: boolean; error?: string }>('POST', `/scan/jobs/${id}/resume`),
+  deleteScanJob: (id: number) => request<{ ok: boolean; error?: string }>('DELETE', `/scan/jobs/${id}`),
 
   startTransferredCheck: () => request<{ ok: boolean; error?: string; total?: number }>('POST', '/transferred/check'),
   abortTransferredCheck: () => request<{ ok: boolean }>('POST', '/transferred/check/abort'),
@@ -128,15 +132,16 @@ export const api = {
   formats: () => request<FormatInfo[]>('GET', '/formats'),
   stats: () => request<Stats>('GET', '/stats'),
 
-  libraryGroups: (filters?: { status?: string; type?: string; search?: string }) => {
+  libraryGroups: (filters?: { status?: string; type?: string; search?: string; excludeUnsupported?: boolean }) => {
     const q = new URLSearchParams();
     if (filters?.status) q.set('status', filters.status);
     if (filters?.type) q.set('type', filters.type);
     if (filters?.search) q.set('search', filters.search);
+    if (filters?.excludeUnsupported) q.set('excludeUnsupported', '1');
     const qs = q.toString();
     return request<LibraryGroup[]>('GET', `/library/groups${qs ? `?${qs}` : ''}`);
   },
-  libraryFiles: (params: { year?: number; yearNull?: boolean; month?: number; day?: number; type?: string; status?: string; search?: string; sort?: string; sortDir?: 'asc' | 'desc'; page?: number; limit?: number }) => {
+  libraryFiles: (params: { year?: number; yearNull?: boolean; month?: number; day?: number; type?: string; status?: string; search?: string; excludeUnsupported?: boolean; sort?: string; sortDir?: 'asc' | 'desc'; page?: number; limit?: number }) => {
     const q = new URLSearchParams();
     if (params.year !== undefined) q.set('year', String(params.year));
     else if (params.yearNull) q.set('year', 'null');
@@ -145,6 +150,7 @@ export const api = {
     if (params.type) q.set('type', params.type);
     if (params.status) q.set('status', params.status);
     if (params.search) q.set('search', params.search);
+    if (params.excludeUnsupported) q.set('excludeUnsupported', '1');
     if (params.sort) q.set('sort', params.sort);
     if (params.sortDir) q.set('sortDir', params.sortDir);
     q.set('page', String(params.page ?? 1));
@@ -163,7 +169,7 @@ export const api = {
   ignored: () => request<IgnoredItem[]>('GET', '/ignored'),
   toggleIgnoreFile: (path: string) => request<{ ignored: boolean }>('POST', '/ignored/file', { path }),
   toggleIgnoreFolder: (path: string) => request<{ ignored: boolean }>('POST', '/ignored/folder', { path }),
-  uploadGroups: (level: 1 | 2 | 3, filters?: { person?: string; deviceKey?: string; status?: string; type?: string; search?: string }) => {
+  uploadGroups: (level: 1 | 2 | 3, filters?: { person?: string; deviceKey?: string; status?: string; type?: string; search?: string; excludeUnsupported?: boolean }) => {
     const q = new URLSearchParams();
     q.set('level', String(level));
     if (filters?.person) q.set('person', filters.person);
@@ -171,6 +177,7 @@ export const api = {
     if (filters?.status) q.set('status', filters.status);
     if (filters?.type) q.set('type', filters.type);
     if (filters?.search) q.set('search', filters.search);
+    if (filters?.excludeUnsupported) q.set('excludeUnsupported', '1');
     return request<UploadGroup[]>('GET', `/upload/groups?${q}`);
   },
 

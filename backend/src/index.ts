@@ -10,6 +10,7 @@ import { startScheduler, stopScheduler } from './core/scheduler.js';
 import { resumeInterruptedScans, stopResumeLoop } from './core/resume.js';
 import { enqueueAllMissingThumbnails } from './db/daos.js';
 import { startThumbnailWorker, stopThumbnailWorker } from './media/thumbnailWorker.js';
+import { startScanWorker, stopScanWorker } from './core/analyze.js';
 import { logger } from './db/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,7 @@ export function createApp(): express.Express {
   getDb();
   enqueueAllMissingThumbnails();
   startThumbnailWorker();
+  startScanWorker();
 
   app.use('/api', api);
 
@@ -66,6 +68,7 @@ export function startServer(port: number = PORT): Server {
     stopScheduler();
     stopResumeLoop();
     stopThumbnailWorker();
+    stopScanWorker();
   });
   return server;
 }

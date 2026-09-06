@@ -3,9 +3,11 @@ import { Alert, Box, Button, Chip, Paper, Stack, Typography } from '@mui/materia
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DevicesIcon from '@mui/icons-material/Devices';
 import { api, mediaUrl } from '../api/client';
+import { RescanButton } from '../components/RescanButton';
 import { MediaGrid, FileInfoCard } from '../components/MediaGrid';
 import { deviceDisplayName } from './DevicesPage';
-import type { Device, FileRecord } from '../types';
+import type { Device, FileRecord, RescanInput } from '../types';
+import type { PageKey } from '../components/Layout';
 
 function BackButton({ label, onBack }: { label: string; onBack: () => void }) {
   return (
@@ -15,11 +17,12 @@ function BackButton({ label, onBack }: { label: string; onBack: () => void }) {
   );
 }
 
-export function FormatPage({ ext, onBack, onOpenImage, onOpenDevice }: {
+export function FormatPage({ ext, onBack, onOpenImage, onOpenDevice, onNavigate }: {
   ext: string;
   onBack: () => void;
   onOpenImage: (id: number) => void;
   onOpenDevice: (id: number) => void;
+  onNavigate: (p: PageKey) => void;
 }) {
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [total, setTotal] = useState(0);
@@ -39,6 +42,19 @@ export function FormatPage({ ext, onBack, onOpenImage, onOpenDevice }: {
 
   useEffect(() => { load(); }, [load]);
 
+  const startRescan = async (input: RescanInput) => {
+    try {
+      const res = await api.startScan(input);
+      if (!res.ok) {
+        setError(res.error ?? 'Erneuter Scan konnte nicht gestartet werden.');
+        return;
+      }
+      onNavigate('actions');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
     <Box>
       <BackButton label="Zurück" onBack={onBack} />
@@ -49,7 +65,7 @@ export function FormatPage({ ext, onBack, onOpenImage, onOpenDevice }: {
         {total} Dateien mit diesem Format
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      <MediaGrid files={files} total={total} page={page} onPage={setPage} onOpenImage={onOpenImage} onOpenDevice={onOpenDevice} />
+      <MediaGrid files={files} total={total} page={page} onPage={setPage} onOpenImage={onOpenImage} onOpenDevice={onOpenDevice} disableHoverPreview renderAction={(f) => <RescanButton title="Datei erneut scannen" onRescan={() => startRescan({ fileIds: [f.id] })} />} />
     </Box>
   );
 }

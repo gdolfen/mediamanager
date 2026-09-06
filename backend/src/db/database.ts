@@ -47,6 +47,10 @@ export function getDb(): DatabaseSync {
   migrateFilesStatusIndexed(db);
   migrateFilesSourceStatusIndex(db);
   migrateFilesOriginalNameIndex(db);
+  migrateFilesDeviceTakenIndex(db);
+  migrateScanJobs(db);
+  migrateEtaBuckets(db);
+  migrateSupportWebpGif(db);
   migrateStoppedStatus(db);
   migrateRunTotals(db);
   seedSettings(db);
@@ -202,6 +206,55 @@ function migrateFilesSourceStatusIndex(d: DatabaseSync): void {
 /** Index für den Transferred-Check (Dateiname-Lookup in der Bibliothek, case-insensitiv). */
 function migrateFilesOriginalNameIndex(d: DatabaseSync): void {
   d.exec('CREATE INDEX IF NOT EXISTS idx_files_original_name ON files(original_name COLLATE NOCASE);');
+}
+
+/** Index für die Geräte-Nutzungszeiträume in listDevices (statt Full-Scan + Sortierung). */
+function migrateFilesDeviceTakenIndex(d: DatabaseSync): void {
+  d.exec('CREATE INDEX IF NOT EXISTS idx_files_device_taken ON files(device_id, taken_at);');
+}
+
+/** Warteschlange für Analyse-Jobs (Scan Phase 2): mehrere Aufgaben, sequentielle Abarbeitung. */function migrateScanJobs(d: DatabaseSync): void {
+  d.exec(`CREATE TABLE IF NOT EXISTS scan_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','completed','stopped','aborted')),
+    total INTEGER NOT NULL DEFAULT 0,
+    checked INTEGER NOT NULL DEFAULT 0,
+    removed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    finished_at TEXT
+  );`);
+  d.exec(`CREATE TABLE IF NOT EXISTS scan_job_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL REFERENCES scan_jobs(id) ON DELETE CASCADE,
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (job_id, file_id)
+  );`);
+  d.exec('CREATE INDEX IF NOT EXISTS idx_scan_job_files_job ON scan_job_files(job_id, id);');
+}
+
+/** Reservoir-Samples für die ETA-Live-Kalibrierung (pro Typ/Größen-Bucket). */
+function migrateEtaBuckets(d: DatabaseSync): void {
+  d.exec(`CREATE TABLE IF NOT EXISTS eta_buckets (
+    file_type TEXT NOT NULL,
+    size_bucket TEXT NOT NULL,
+    n INTEGER NOT NULL DEFAULT 0,
+    samples TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (file_type, size_bucket)
+  );`);
+}
+
+/** webp/gif werden unterstützt: Flags, bestehende Zeilen und deren Probleme nachziehen. */
+function migrateSupportWebpGif(d: DatabaseSync): void {
+  d.exec(`UPDATE formats SET supported = 1 WHERE lower(ext) IN ('webp', 'gif')`);
+  d.exec(`UPDATE files SET file_type = 'image', status = 'indexed', updated_at = datetime('now')
+    WHERE lower(ext) IN ('webp', 'gif') AND file_type = 'other'`);
+  d.exec(`UPDATE problems SET resolved = 1, resolved_at = datetime('now')
+    WHERE type = 'UNSUPPORTED_FORMAT' AND resolved = 0
+      AND file_id IN (SELECT id FROM files WHERE lower(files.ext) IN ('webp', 'gif'))`);
 }
 
 /** Add 'stopped' status for manual UI stops (vs 'aborted' for crashes). */

@@ -30,6 +30,7 @@ import {
   listProblems,
   listProblemsForFile,
   listRuns,
+  listScanJobs,
   listUnknownDeviceCandidates,
   toggleIgnoreFile,
   toggleIgnoreFolder,
@@ -60,11 +61,14 @@ import {
   startRecheck,
 } from '../core/recheck.js';
 import {
-  getRescanState,
-  isRescanRunning,
-  requestRescanAbort,
-  startRescan,
-} from '../core/rescan.js';
+  getScanWorkerState,
+  isScanWorkerRunning,
+  requestScanAbort,
+  enqueueScan,
+  resolveScanScope,
+  resumeScanJob,
+  removeScanJob,
+} from '../core/analyze.js';
 import {
   getTransferredCheckState,
   isTransferredCheckRunning,
@@ -304,7 +308,9 @@ api.get('/files', (req, res) => {
   const sourceRoot = typeof req.query.sourceRoot === 'string' ? req.query.sourceRoot as 'upload' | 'fotos' | 'videos' : undefined;
   const type = typeof req.query.type === 'string' ? req.query.type as 'image' | 'video' : undefined;
   const search = typeof req.query.search === 'string' ? req.query.search : undefined;
-  const ext = typeof req.query.ext === 'string' ? req.query.ext : undefined;
+  // '_' ist der Platzhalter für "keine Dateiendung" (leerer ext-Wert).
+  const extRaw = typeof req.query.ext === 'string' ? req.query.ext : undefined;
+  const ext = extRaw === '_' ? '' : extRaw;
   const identifierKind = typeof req.query.identifierKind === 'string' ? req.query.identifierKind as 'exif' | 'path' : undefined;
   const identifierValue = typeof req.query.identifierValue === 'string' ? req.query.identifierValue : undefined;
   if (identifierKind && identifierValue) {
@@ -312,7 +318,7 @@ api.get('/files', (req, res) => {
     res.json({ rows: matched, total: matched.length, page: 1, limit });
     return;
   }
-  if (ext) {
+  if (ext !== undefined) {
     const matched = listFilesByExt(ext, limit, (page - 1) * limit);
     res.json({ rows: matched.rows, total: matched.total, page, limit });
     return;
@@ -368,7 +374,8 @@ api.get('/upload/groups', (req, res) => {
   const status = typeof req.query.status === 'string' ? req.query.status : undefined;
   const type = req.query.type === 'image' || req.query.type === 'video' ? req.query.type : undefined;
   const search = typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined;
-  res.json(listUploadHierarchy(level, { person, deviceKey, status, type, search }));
+  const excludeUnsupported = req.query.excludeUnsupported === '1';
+  res.json(listUploadHierarchy(level, { person, deviceKey, status, type, search, excludeUnsupported }));
 });
 
 /* ---------- problems ---------- */
@@ -414,19 +421,48 @@ api.get('/problems/recheck/status', (_req, res) => {
   res.json(getRecheckState());
 });
 
-/* ---------- rescan (einzelne Dateien / Kachel-Inhalte) ---------- */
+/* ---------- scan (analyse-warteschlange, phase 2) ---------- */
 
-api.post('/rescan', (req, res) => {
-  const result = startRescan(req.body ?? {});
+api.post('/scan', (req, res) => {
+  const resolved = resolveScanScope(req.body ?? {});
+  if (resolved.error || resolved.fileIds.length === 0) {
+    res.status(409).json({ ok: false, error: resolved.error ?? 'Keine Dateien ausgewählt.' });
+    return;
+  }
+  const job = enqueueScan(`${resolved.label} (${resolved.fileIds.length.toLocaleString('de-DE')} Dateien)`, resolved.fileIds);
+  res.status(202).json({ ok: true, jobId: job.id, total: job.total });
+});
+
+api.post('/scan/abort', (_req, res) => {
+  res.json({ ok: requestScanAbort() });
+});
+
+api.get('/scan/status', (_req, res) => {
+  res.json(getScanWorkerState());
+});
+
+api.get('/scan/jobs', (_req, res) => {
+  res.json(listScanJobs(30));
+});
+
+api.post('/scan/jobs/:id/resume', (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ ok: false, error: 'Ungültige ID.' });
+    return;
+  }
+  const result = resumeScanJob(id);
   res.status(result.ok ? 202 : 409).json(result);
 });
 
-api.post('/rescan/abort', (_req, res) => {
-  res.json({ ok: requestRescanAbort() });
-});
-
-api.get('/rescan/status', (_req, res) => {
-  res.json(getRescanState());
+api.delete('/scan/jobs/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ ok: false, error: 'Ungültige ID.' });
+    return;
+  }
+  const result = removeScanJob(id);
+  res.status(result.ok ? 200 : result.error === 'Auftrag nicht gefunden.' ? 404 : 409).json(result);
 });
 
 /* ---------- transferred check (upload vs. bibliothek, nur DB) ---------- */
@@ -604,7 +640,8 @@ api.get('/library/groups', (req, res) => {
   const status = typeof req.query.status === 'string' && req.query.status ? req.query.status : undefined;
   const type = req.query.type === 'image' || req.query.type === 'video' ? req.query.type : undefined;
   const search = typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined;
-  res.json(listLibraryGroups({ status, type, search }));
+  const excludeUnsupported = req.query.excludeUnsupported === '1';
+  res.json(listLibraryGroups({ status, type, search, excludeUnsupported }));
 });
 
 api.get('/library', (req, res) => {
@@ -619,7 +656,8 @@ api.get('/library', (req, res) => {
   const search = typeof req.query.search === 'string' && req.query.search ? req.query.search : undefined;
   const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
   const sortDir = req.query.sortDir === 'asc' ? 'asc' as const : 'desc' as const;
-  const { rows, total } = listLibraryFiles({ year, yearNull, month, day, type, status, search, sort, sortDir, limit, offset: (page - 1) * limit });
+  const excludeUnsupported = req.query.excludeUnsupported === '1';
+  const { rows, total } = listLibraryFiles({ year, yearNull, month, day, type, status, search, excludeUnsupported, sort, sortDir, limit, offset: (page - 1) * limit });
   res.json({ rows, total, page, limit });
 });
 
@@ -660,7 +698,7 @@ api.get('/stats', (_req, res) => {
     openProblems: listProblems({ resolved: false, limit: 1, offset: 0 }).total,
     devices: countDevices(),
     formats: countFormats(),
-    running: isRunning() || isUploadScanRunning() || isTargetScanRunning() || isRecheckRunning() || isRescanRunning() || isTransferredCheckRunning(),
+    running: isRunning() || isUploadScanRunning() || isTargetScanRunning() || isRecheckRunning() || isScanWorkerRunning() || isTransferredCheckRunning(),
     active: activeKinds(),
     paths: getPaths(),
     schedule: getScheduleState(),

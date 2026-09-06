@@ -22,7 +22,6 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '../api/client';
 import { useHashRoute } from '../hooks/useHashRoute';
-import { useActivity } from '../hooks/useActivity';
 import { RescanButton } from '../components/RescanButton';
 import { MediaGrid, type SortKey, type SortDir } from '../components/MediaGrid';
 import type { FileRecord, LibraryGroup, RescanInput } from '../types';
@@ -54,7 +53,6 @@ export function LibraryPage({ onOpenImage, onOpenDevice, onNavigate }: {
   const sortDir = (hashParams.sortDir as SortDir) || 'desc';
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const busy = useActivity();
 
   const updateHash = useCallback((updates: Record<string, string | number | undefined>) => {
     const current: Record<string, string | number> = {};
@@ -70,7 +68,7 @@ export function LibraryPage({ onOpenImage, onOpenDevice, onNavigate }: {
   const loadGroups = useCallback(async () => {
     try {
       setLoading(true);
-      setGroups(await api.libraryGroups({ status: status || undefined, type: type || undefined, search: search || undefined }));
+      setGroups(await api.libraryGroups({ status: status || undefined, type: type || undefined, search: search || undefined, excludeUnsupported: true }));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -80,12 +78,12 @@ export function LibraryPage({ onOpenImage, onOpenDevice, onNavigate }: {
 
   const filterActive = Boolean(status || type || search);
   const visibleGroups = filterActive ? groups.filter((g) => g.count > 0) : groups;
-  const rescanFilters = { status: status || undefined, type: type || undefined, search: search || undefined };
+  const rescanFilters = { status: status || undefined, type: type || undefined, search: search || undefined, excludeUnsupported: true };
 
   const loadFiles = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await api.libraryFiles({ year: year ?? undefined, yearNull: noYear || undefined, month: month ?? undefined, day: day ?? undefined, type: type || undefined, status: status || undefined, search: search || undefined, sort: sortKey, sortDir, page, limit: 120 });
+      const res = await api.libraryFiles({ year: year ?? undefined, yearNull: noYear || undefined, month: month ?? undefined, day: day ?? undefined, type: type || undefined, status: status || undefined, search: search || undefined, excludeUnsupported: true, sort: sortKey, sortDir, page, limit: 120 });
       setFiles(res.rows);
       setFilesTotal(res.total);
       setError(null);
@@ -113,7 +111,7 @@ export function LibraryPage({ onOpenImage, onOpenDevice, onNavigate }: {
 
   const startRescan = async (input: RescanInput) => {
     try {
-      const res = await api.startRescan(input);
+      const res = await api.startScan(input);
       if (!res.ok) {
         setError(res.error ?? 'Erneuter Scan konnte nicht gestartet werden.');
         return;
@@ -158,7 +156,6 @@ export function LibraryPage({ onOpenImage, onOpenDevice, onNavigate }: {
           <Box sx={{ flexGrow: 1 }} />
           <Chip size="small" label="Alle" color={status === '' ? 'primary' : 'default'} onClick={() => navigateWithFilters({ status: '' })} />
           <Chip size="small" label="Indexiert" color={status === 'indexed' ? 'primary' : 'default'} onClick={() => navigateWithFilters({ status: 'indexed' })} />
-          <Chip size="small" label="Offen" color={status === 'pending' ? 'warning' : 'default'} onClick={() => navigateWithFilters({ status: 'pending' })} />
           <Chip size="small" label="Übertragen" color={status === 'transferred' ? 'success' : 'default'} onClick={() => navigateWithFilters({ status: 'transferred' })} />
           <FormControl size="small" sx={{ minWidth: 160 }}>
             <InputLabel>Typ</InputLabel>
@@ -173,18 +170,18 @@ export function LibraryPage({ onOpenImage, onOpenDevice, onNavigate }: {
       </Grid>
 
       <Grid item xs={12}>
-        {year === null && !noYear && <YearGrid years={years} groups={visibleGroups} type={type} onPick={(y) => navigateTo(y, null, null)} rescanDisabled={busy} onRescan={(y) => startRescan({ library: { year: y, ...rescanFilters } })} />}
+        {year === null && !noYear && <YearGrid years={years} groups={visibleGroups} type={type} onPick={(y) => navigateTo(y, null, null)} onRescan={(y) => startRescan({ library: { year: y, ...rescanFilters } })} filterActive={filterActive} />}
         {year === null && !noYear && noYearGroup && (noYearGroup.count ?? 0) > 0 && (
           <Grid container spacing={2} sx={{ mt: 0 }}>
             <Grid item xs={6} sm={4} md={3}>
               <Card sx={{ position: 'relative' }}>
                 <Box sx={{ position: 'absolute', top: 6, right: 6, zIndex: 1 }}>
-                    <RescanButton title="Alle Dateien ohne Jahr erneut scannen" disabled={busy} onRescan={() => startRescan({ library: { yearNull: true, ...rescanFilters } })} />
+                    <RescanButton title="Alle Dateien ohne Jahr erneut scannen" onRescan={() => startRescan({ library: { yearNull: true, ...rescanFilters } })} />
                 </Box>
                 <CardActionArea onClick={navigateNoYear}>
                   <CardContent sx={{ textAlign: 'center' }}>
                     <Typography variant="h5" fontWeight={600}>Sonstige</Typography>
-                    <CountText images={noYearGroup.images ?? 0} videos={noYearGroup.videos ?? 0} type={type} />
+                    <CountText images={noYearGroup.images ?? 0} videos={noYearGroup.videos ?? 0} total={noYearGroup.count ?? 0} type={type} />
                     <Typography variant="caption" color="text.secondary">ohne Jahr</Typography>
                   </CardContent>
                 </CardActionArea>
@@ -192,84 +189,91 @@ export function LibraryPage({ onOpenImage, onOpenDevice, onNavigate }: {
             </Grid>
           </Grid>
         )}
-        {year !== null && month === null && <MonthGrid year={year} months={months} groups={visibleGroups} type={type} onPick={(m) => navigateTo(year, m, null)} rescanDisabled={busy} onRescan={(m) => startRescan({ library: { year, month: m, ...rescanFilters } })} />}
-        {year !== null && month !== null && day === null && <DayGrid year={year} month={month} days={days} groups={visibleGroups} type={type} onPick={(d) => navigateTo(year, month, d)} rescanDisabled={busy} onRescan={(d) => startRescan({ library: { year, month, day: d, ...rescanFilters } })} />}
+        {year !== null && month === null && <MonthGrid year={year} months={months} groups={visibleGroups} type={type} onPick={(m) => navigateTo(year, m, null)} onRescan={(m) => startRescan({ library: { year, month: m, ...rescanFilters } })} filterActive={filterActive} />}
+        {year !== null && month !== null && day === null && <DayGrid year={year} month={month} days={days} groups={visibleGroups} type={type} onPick={(d) => navigateTo(year, month, d)} onRescan={(d) => startRescan({ library: { year, month, day: d, ...rescanFilters } })} filterActive={filterActive} />}
         <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>
           {noYear ? 'Sonstige (ohne Jahr)' : year === null ? 'Alle Medien' : month === null ? `Jahr ${year}` : day === null ? `${MONTH_NAMES[month - 1]} ${year}` : `${day}. ${MONTH_NAMES[month - 1]} ${year}`}
         </Typography>
-        <MediaGrid files={files} total={filesTotal} page={page} onPage={(p) => updateHash({ page: p })} onOpenImage={onOpenImage} onOpenDevice={onOpenDevice} sortKey={sortKey} sortDir={sortDir} onSortChange={(k, d) => updateHash({ sort: k, sortDir: d, page: 1 })} disableHoverPreview renderAction={(f) => <RescanButton title="Datei erneut scannen" disabled={busy} onRescan={() => startRescan({ fileIds: [f.id] })} />} />
+        <MediaGrid files={files} total={filesTotal} page={page} onPage={(p) => updateHash({ page: p })} onOpenImage={onOpenImage} onOpenDevice={onOpenDevice} sortKey={sortKey} sortDir={sortDir} onSortChange={(k, d) => updateHash({ sort: k, sortDir: d, page: 1 })} disableHoverPreview renderAction={(f) => <RescanButton title="Datei erneut scannen" onRescan={() => startRescan({ fileIds: [f.id] })} />} />
       </Grid>
     </Grid>
   );
 }
 
-function CountText({ images, videos, type }: { images: number; videos: number; type: string }) {
+function CountText({ images, videos, total, type }: { images: number; videos: number; total?: number; type: string }) {
   if (type === 'image') return <Typography variant="body2" color="text.secondary">{images.toLocaleString('de-DE')} Fotos</Typography>;
   if (type === 'video') return <Typography variant="body2" color="text.secondary">{videos.toLocaleString('de-DE')} Videos</Typography>;
-  return <Typography variant="body2" color="text.secondary">{images.toLocaleString('de-DE')} Fotos · {videos.toLocaleString('de-DE')} Videos</Typography>;
+  const t = total ?? images + videos;
+  const parts: string[] = [];
+  if (images > 0) parts.push(`${images.toLocaleString('de-DE')} Fotos`);
+  if (videos > 0) parts.push(`${videos.toLocaleString('de-DE')} Videos`);
+  const breakdown = parts.length ? ` (${parts.join(' · ')})` : '';
+  return <Typography variant="body2" color="text.secondary">{t.toLocaleString('de-DE')} {t === 1 ? 'Datei' : 'Dateien'}{breakdown}</Typography>;
 }
 
-function YearGrid({ years, groups, type, onPick, rescanDisabled, onRescan }: { years: number[]; groups: LibraryGroup[]; type: string; onPick: (y: number) => void; rescanDisabled?: boolean; onRescan?: (y: number) => void }) {
+function YearGrid({ years, groups, type, onPick, onRescan, filterActive }: { years: number[]; groups: LibraryGroup[]; type: string; onPick: (y: number) => void; onRescan?: (y: number) => void; filterActive?: boolean }) {
   return (
     <Grid container spacing={2}>
       {years.map((y) => {
         const yearGroups = groups.filter((g) => g.year === y);
         const images = yearGroups.reduce((s, g) => s + (g.images ?? 0), 0);
         const videos = yearGroups.reduce((s, g) => s + (g.videos ?? 0), 0);
+        const total = yearGroups.reduce((s, g) => s + (g.count ?? 0), 0);
         return (
           <Grid item xs={6} sm={4} md={3} key={y}>
             <Card sx={{ position: 'relative' }}>
               {onRescan && (
                 <Box sx={{ position: 'absolute', top: 6, right: 6, zIndex: 1 }}>
-                  <RescanButton title={`Alle Dateien aus ${y} erneut scannen`} disabled={rescanDisabled} onRescan={() => onRescan(y)} />
+                  <RescanButton title={`Alle Dateien aus ${y} erneut scannen`} onRescan={() => onRescan(y)} />
                 </Box>
               )}
               <CardActionArea onClick={() => onPick(y)}>
                 <CardContent>
                   <Typography variant="h3" sx={{ fontWeight: 700 }}>{y}</Typography>
-                  <CountText images={images} videos={videos} type={type} />
+                  <CountText images={images} videos={videos} total={total} type={type} />
                 </CardContent>
               </CardActionArea>
             </Card>
           </Grid>
         );
       })}
-      {years.length === 0 && <Grid item xs={12}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>Noch keine Medien in der Bibliothek. Führe zuerst einen Zielordner-Scan durch.</Typography></Grid>}
+      {years.length === 0 && <Grid item xs={12}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>{filterActive ? 'Keine Treffer für diesen Filter.' : 'Noch keine Medien in der Bibliothek. Führe zuerst einen Zielordner-Scan durch.'}</Typography></Grid>}
     </Grid>
   );
 }
 
-function MonthGrid({ year, months, groups, type, onPick, rescanDisabled, onRescan }: { year: number; months: number[]; groups: LibraryGroup[]; type: string; onPick: (m: number) => void; rescanDisabled?: boolean; onRescan?: (m: number) => void }) {
+function MonthGrid({ year, months, groups, type, onPick, onRescan, filterActive }: { year: number; months: number[]; groups: LibraryGroup[]; type: string; onPick: (m: number) => void; onRescan?: (m: number) => void; filterActive?: boolean }) {
   return (
     <Grid container spacing={2}>
       {months.map((m) => {
         const monthGroups = groups.filter((g) => g.year === year && g.month === m);
         const images = monthGroups.reduce((s, g) => s + (g.images ?? 0), 0);
         const videos = monthGroups.reduce((s, g) => s + (g.videos ?? 0), 0);
+        const total = monthGroups.reduce((s, g) => s + (g.count ?? 0), 0);
         return (
           <Grid item xs={6} sm={4} md={3} key={m}>
             <Card sx={{ position: 'relative' }}>
               {onRescan && (
                 <Box sx={{ position: 'absolute', top: 6, right: 6, zIndex: 1 }}>
-                  <RescanButton title={`Alle Dateien aus ${MONTH_NAMES[m - 1]} ${year} erneut scannen`} disabled={rescanDisabled} onRescan={() => onRescan(m)} />
+                  <RescanButton title={`Alle Dateien aus ${MONTH_NAMES[m - 1]} ${year} erneut scannen`} onRescan={() => onRescan(m)} />
                 </Box>
               )}
               <CardActionArea onClick={() => onPick(m)}>
                 <CardContent sx={{ textAlign: 'center' }}>
                   <Typography variant="h5" fontWeight={600}>{MONTH_NAMES[m - 1]}</Typography>
-                  <CountText images={images} videos={videos} type={type} />
+                  <CountText images={images} videos={videos} total={total} type={type} />
                 </CardContent>
               </CardActionArea>
             </Card>
           </Grid>
         );
       })}
-      {months.length === 0 && <Grid item xs={12}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>Keine Medien in diesem Jahr.</Typography></Grid>}
+      {months.length === 0 && <Grid item xs={12}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>{filterActive ? 'Keine Treffer für diesen Filter.' : 'Keine Medien in diesem Jahr.'}</Typography></Grid>}
     </Grid>
   );
 }
 
-function DayGrid({ year, month, days, groups, type, onPick, rescanDisabled, onRescan }: { year: number; month: number; days: number[]; groups: LibraryGroup[]; type: string; onPick: (d: number) => void; rescanDisabled?: boolean; onRescan?: (d: number) => void }) {
+function DayGrid({ year, month, days, groups, type, onPick, onRescan, filterActive }: { year: number; month: number; days: number[]; groups: LibraryGroup[]; type: string; onPick: (d: number) => void; onRescan?: (d: number) => void; filterActive?: boolean }) {
   return (
     <Grid container spacing={2}>
       {days.map((d) => {
@@ -279,21 +283,21 @@ function DayGrid({ year, month, days, groups, type, onPick, rescanDisabled, onRe
             <Card sx={{ position: 'relative' }}>
               {onRescan && (
                 <Box sx={{ position: 'absolute', top: 6, right: 6, zIndex: 1 }}>
-                  <RescanButton title={`Alle Dateien vom ${d}. ${MONTH_NAMES[month - 1]} ${year} erneut scannen`} disabled={rescanDisabled} onRescan={() => onRescan(d)} />
+                  <RescanButton title={`Alle Dateien vom ${d}. ${MONTH_NAMES[month - 1]} ${year} erneut scannen`} onRescan={() => onRescan(d)} />
                 </Box>
               )}
               <CardActionArea onClick={() => onPick(d)}>
                 <CardContent sx={{ textAlign: 'center' }}>
                   <Typography variant="h5" fontWeight={700}>{d}.</Typography>
                   <Typography variant="body2">{MONTH_NAMES[month - 1]} {year}</Typography>
-                  <CountText images={g?.images ?? 0} videos={g?.videos ?? 0} type={type} />
+                  <CountText images={g?.images ?? 0} videos={g?.videos ?? 0} total={g?.count ?? 0} type={type} />
                 </CardContent>
               </CardActionArea>
             </Card>
           </Grid>
         );
       })}
-      {days.length === 0 && <Grid item xs={12}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>Keine Medien in diesem Monat.</Typography></Grid>}
+      {days.length === 0 && <Grid item xs={12}><Typography color="text.secondary" align="center" sx={{ py: 4 }}>{filterActive ? 'Keine Treffer für diesen Filter.' : 'Keine Medien in diesem Monat.'}</Typography></Grid>}
     </Grid>
   );
 }

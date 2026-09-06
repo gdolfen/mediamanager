@@ -13,6 +13,7 @@ import {
 } from '../db/daos.js';
 import { evaluateFile } from './evaluator.js';
 import { analyzeLibraryFile } from './libraryScan.js';
+import { cacheDevices, clearDeviceCache } from './devices.js';
 import { tryAcquire, release } from './active.js';
 import { scanPace } from './pace.js';
 import { pathExists } from './paths.js';
@@ -137,11 +138,13 @@ function finishRecheck(): void {
     clearScanProgress('recheck');
     logger.warn('scan', `Probleme-Neubewertung abgebrochen: ${state.checked} Dateien geprüft.`);
   }
+  clearDeviceCache();
   release('recheck');
 }
 
 async function runRecheckInternal(resume: boolean): Promise<void> {
   try {
+    cacheDevices();
     const files = listFilesWithProblems();
     state.total = files.length;
     const resumeFrom = resume && getScanProgress('recheck')?.current ? Number(getScanProgress('recheck')!.current) : 0;

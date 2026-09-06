@@ -78,7 +78,7 @@ export interface Problem {
   createdAt: string;
 }
 
-export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck' | 'rescan' | 'transferredCheck';
+export type RunKind = 'transfer' | 'uploadScan' | 'targetScan' | 'recheck' | 'scan' | 'transferredCheck';
 
 export interface TransferRun {
   id: number;
@@ -100,7 +100,7 @@ export interface ScanSummary {
   formats: { ext: string; count: number; supported: boolean }[];
 }
 
-export const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'heic', 'heif', 'png', 'tiff', 'tif']);
+export const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'heic', 'heif', 'png', 'tiff', 'tif', 'webp', 'gif']);
 export const VIDEO_EXTS = new Set(['mp4', 'mov', 'm4v', 'mkv', 'avi', '3gp', '3g2', 'webm', 'mts', 'm2ts']);
 
 export function isSupportedImageExt(ext: string): boolean {

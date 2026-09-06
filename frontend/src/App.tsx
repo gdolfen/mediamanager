@@ -63,7 +63,7 @@ export default function App() {
         {detail?.kind === 'identifier' && (
           <IdentifierPage identifierKind={detail.identifierKind} identifierValue={detail.identifierValue} onBack={goBack} onOpenImage={openImage} onOpenDevice={openDevice} />
         )}
-        {detail?.kind === 'format' && <FormatPage ext={detail.ext} onBack={goBack} onOpenImage={openImage} onOpenDevice={openDevice} />}
+        {detail?.kind === 'format' && <FormatPage ext={detail.ext} onBack={goBack} onOpenImage={openImage} onOpenDevice={openDevice} onNavigate={navigate} />}
         {!detail && page === 'dashboard' && <Dashboard onStartTransfer={startTransfer} onNavigate={navigate} />}
         {!detail && page === 'library' && <LibraryPage onOpenImage={openImage} onOpenDevice={openDevice} onNavigate={navigate} />}
         {!detail && page === 'upload' && <UploadPage onOpenImage={openImage} onOpenDevice={openDevice} onNavigate={navigate} />}
